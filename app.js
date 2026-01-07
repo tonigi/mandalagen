@@ -2,6 +2,7 @@ const svgLayer = document.getElementById("svgLayer");
 const imageInput = document.getElementById("imageInput");
 const overlayCanvas = document.getElementById("overlayCanvas");
 const opacityInput = document.getElementById("opacityInput");
+const paletteSelect = document.getElementById("paletteSelect");
 const scaleInput = document.getElementById("scaleInput");
 const translateXInput = document.getElementById("translateXInput");
 const translateYInput = document.getElementById("translateYInput");
@@ -16,12 +17,25 @@ const canvas = overlayCanvas;
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
 const svgPath = "data/onepage clean.svg";
+const fixedPalette = [
+  { name: "red", hex: "#e53935" },
+  { name: "blue", hex: "#1e88e5" },
+  { name: "orange", hex: "#fb8c00" },
+  { name: "lightblue", hex: "#4fc3f7" },
+  { name: "yellow", hex: "#fdd835" },
+  { name: "white", hex: "#ffffff" },
+];
 let originalSvgText = "";
 let svgRoot = null;
 let viewBox = { width: 0, height: 0 };
 let currentImageUrl = "";
 let sourceImage = null;
 let imageReady = false;
+let svgPalette = [];
+let paletteRgb = fixedPalette.map((entry) => ({
+  ...entry,
+  ...hexToRgb(entry.hex),
+}));
 const imageTransform = {
   scale: 1,
   translateX: 0,
@@ -105,6 +119,111 @@ function rgbToHex(r, g, b) {
     .join("")}`;
 }
 
+function normalizeHex(hex) {
+  const value = hex.replace("#", "").trim();
+  if (value.length === 3) {
+    return `#${value
+      .split("")
+      .map((part) => part + part)
+      .join("")}`.toLowerCase();
+  }
+  if (value.length === 6) {
+    return `#${value}`.toLowerCase();
+  }
+  return "";
+}
+
+function hexToRgb(hex) {
+  const normalized = normalizeHex(hex).replace("#", "");
+  if (!normalized) {
+    return null;
+  }
+  const int = Number.parseInt(normalized, 16);
+  return {
+    r: (int >> 16) & 255,
+    g: (int >> 8) & 255,
+    b: int & 255,
+  };
+}
+
+function parseRgbString(value) {
+  const match = value.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/i);
+  if (!match) {
+    return null;
+  }
+  return {
+    r: Number(match[1]),
+    g: Number(match[2]),
+    b: Number(match[3]),
+  };
+}
+
+function colorToRgb(value) {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed.startsWith("#")) {
+    return hexToRgb(trimmed);
+  }
+  if (trimmed.toLowerCase().startsWith("rgb")) {
+    return parseRgbString(trimmed);
+  }
+  return null;
+}
+
+function buildPaletteFromSvg(svgText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgText, "image/svg+xml");
+  const paths = doc.querySelectorAll("path");
+  const colors = new Map();
+  paths.forEach((path) => {
+    const fill = getFillValue(path);
+    if (!fill || fill.toLowerCase() === "none") {
+      return;
+    }
+    const rgb = colorToRgb(fill);
+    if (!rgb) {
+      return;
+    }
+    const hex = rgbToHex(rgb.r, rgb.g, rgb.b).toLowerCase();
+    colors.set(hex, { name: hex, hex, ...rgb });
+  });
+  return Array.from(colors.values());
+}
+
+function setPalette(mode) {
+  if (mode === "svg" && svgPalette.length) {
+    paletteRgb = svgPalette;
+  } else {
+    paletteRgb = fixedPalette
+      .map((entry) => {
+        const rgb = hexToRgb(entry.hex);
+        return rgb ? { ...entry, ...rgb } : null;
+      })
+      .filter(Boolean);
+  }
+}
+
+function nearestPaletteColor(r, g, b) {
+  if (!paletteRgb.length) {
+    return "#ffffff";
+  }
+  let closest = paletteRgb[0];
+  let closestDist = Number.POSITIVE_INFINITY;
+  for (const color of paletteRgb) {
+    const dr = r - color.r;
+    const dg = g - color.g;
+    const db = b - color.b;
+    const dist = dr * dr + dg * dg + db * db;
+    if (dist < closestDist) {
+      closestDist = dist;
+      closest = color;
+    }
+  }
+  return closest.hex;
+}
+
 function sampleColorAt(x, y) {
   const ix = Math.max(0, Math.min(Math.round(x), canvas.width - 1));
   const iy = Math.max(0, Math.min(Math.round(y), canvas.height - 1));
@@ -112,7 +231,7 @@ function sampleColorAt(x, y) {
   if (data[3] === 0) {
     return "#ffffff";
   }
-  return rgbToHex(data[0], data[1], data[2]);
+  return nearestPaletteColor(data[0], data[1], data[2]);
 }
 
 function getPathCenterInViewBox(path) {
@@ -196,6 +315,7 @@ function drawImageToCanvas() {
   const baseHeight = sourceImage.height * baseScale;
   const baseX = (viewBox.width - baseWidth) / 2;
   const baseY = (viewBox.height - baseHeight) / 2;
+  ctx.imageSmoothingEnabled = false;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.save();
@@ -249,6 +369,10 @@ opacityInput.addEventListener("input", (event) => {
   overlayCanvas.style.opacity = event.target.value;
 });
 
+paletteSelect.addEventListener("change", (event) => {
+  setPalette(event.target.value);
+});
+
 scaleInput.addEventListener("input", updateTransformValues);
 translateXInput.addEventListener("input", updateTransformValues);
 translateYInput.addEventListener("input", updateTransformValues);
@@ -273,6 +397,8 @@ async function init() {
     }
     originalSvgText = await response.text();
     insertSvg(originalSvgText);
+    svgPalette = buildPaletteFromSvg(originalSvgText);
+    setPalette(paletteSelect.value);
     const translateRangeX = Math.round(viewBox.width * 0.35);
     const translateRangeY = Math.round(viewBox.height * 0.35);
     translateXInput.min = -translateRangeX;
