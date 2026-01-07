@@ -36,6 +36,9 @@ let paletteRgb = fixedPalette.map((entry) => ({
   ...entry,
   ...hexToRgb(entry.hex),
 }));
+let layoutReady = false;
+let isDragging = false;
+let lastPointer = { x: 0, y: 0 };
 const imageTransform = {
   scale: 1,
   translateX: 0,
@@ -205,6 +208,10 @@ function setPalette(mode) {
   }
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function nearestPaletteColor(r, g, b) {
   if (!paletteRgb.length) {
     return "#ffffff";
@@ -259,6 +266,20 @@ function applyColors() {
     setStatus("Load an image before applying colors.");
     return;
   }
+  if (!canvas.width || !canvas.height) {
+    setStatus("Image not ready yet.");
+    return;
+  }
+  const svgRect = svgRoot.getBoundingClientRect();
+  if (!svgRect.width || !svgRect.height || !layoutReady) {
+    setStatus("Preparing layout...");
+    requestAnimationFrame(() => {
+      layoutReady = true;
+      applyColors();
+    });
+    return;
+  }
+  drawImageToCanvas();
 
   const paths = svgRoot.querySelectorAll("path");
   const toRecolor = [];
@@ -292,8 +313,11 @@ function loadImage(file) {
     sourceImage = img;
     canvas.width = viewBox.width;
     canvas.height = viewBox.height;
-    drawImageToCanvas();
+    scaleInput.value = "1";
+    translateXInput.value = "0";
+    translateYInput.value = "0";
     imageReady = true;
+    updateTransformValues();
     setStatus("Image loaded. Ready to apply colors.");
   };
   img.onerror = () => {
@@ -307,7 +331,7 @@ function drawImageToCanvas() {
   if (!sourceImage || !canvas.width || !canvas.height) {
     return;
   }
-  const baseScale = Math.min(
+  const baseScale = Math.max(
     viewBox.width / sourceImage.width,
     viewBox.height / sourceImage.height
   );
@@ -377,6 +401,59 @@ scaleInput.addEventListener("input", updateTransformValues);
 translateXInput.addEventListener("input", updateTransformValues);
 translateYInput.addEventListener("input", updateTransformValues);
 
+overlayCanvas.addEventListener("pointerdown", (event) => {
+  if (!imageReady) {
+    return;
+  }
+  isDragging = true;
+  overlayCanvas.setPointerCapture(event.pointerId);
+  overlayCanvas.style.cursor = "grabbing";
+  lastPointer = { x: event.clientX, y: event.clientY };
+});
+
+overlayCanvas.addEventListener("pointermove", (event) => {
+  if (!isDragging || !svgRoot) {
+    return;
+  }
+  const svgRect = svgRoot.getBoundingClientRect();
+  if (!svgRect.width || !svgRect.height) {
+    return;
+  }
+  const dx = event.clientX - lastPointer.x;
+  const dy = event.clientY - lastPointer.y;
+  lastPointer = { x: event.clientX, y: event.clientY };
+  const dxView = (dx / svgRect.width) * viewBox.width;
+  const dyView = (dy / svgRect.height) * viewBox.height;
+  const nextX = clamp(
+    Number(translateXInput.value) + dxView,
+    Number(translateXInput.min),
+    Number(translateXInput.max)
+  );
+  const nextY = clamp(
+    Number(translateYInput.value) + dyView,
+    Number(translateYInput.min),
+    Number(translateYInput.max)
+  );
+  translateXInput.value = `${nextX}`;
+  translateYInput.value = `${nextY}`;
+  updateTransformValues();
+});
+
+function endDrag(event) {
+  if (!isDragging) {
+    return;
+  }
+  isDragging = false;
+  overlayCanvas.style.cursor = "grab";
+  if (event && overlayCanvas.hasPointerCapture(event.pointerId)) {
+    overlayCanvas.releasePointerCapture(event.pointerId);
+  }
+}
+
+overlayCanvas.addEventListener("pointerup", endDrag);
+overlayCanvas.addEventListener("pointercancel", endDrag);
+overlayCanvas.addEventListener("pointerleave", endDrag);
+
 imageInput.addEventListener("change", (event) => {
   const file = event.target.files[0];
   if (!file) {
@@ -406,6 +483,9 @@ async function init() {
     translateYInput.min = -translateRangeY;
     translateYInput.max = translateRangeY;
     updateTransformValues();
+    requestAnimationFrame(() => {
+      layoutReady = true;
+    });
     setStatus("SVG loaded. Upload an image to begin.");
   } catch (error) {
     setStatus("Could not load the SVG file.");

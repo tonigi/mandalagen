@@ -175,9 +175,9 @@ button:hover {
   height: 100%;
   opacity: 0.65;
   mix-blend-mode: multiply;
-  pointer-events: none;
   z-index: 2;
   image-rendering: pixelated;
+  cursor: grab;
 }
 
 #svgLayer {
