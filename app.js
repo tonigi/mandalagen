@@ -109,6 +109,9 @@ function sampleColorAt(x, y) {
   const ix = Math.max(0, Math.min(Math.round(x), canvas.width - 1));
   const iy = Math.max(0, Math.min(Math.round(y), canvas.height - 1));
   const data = ctx.getImageData(ix, iy, 1, 1).data;
+  if (data[3] === 0) {
+    return "#ffffff";
+  }
   return rgbToHex(data[0], data[1], data[2]);
 }
 
@@ -139,20 +142,25 @@ function applyColors() {
   }
 
   const paths = svgRoot.querySelectorAll("path");
+  const toRecolor = [];
   let updated = 0;
 
   paths.forEach((path) => {
     const fill = getFillValue(path);
-    if (!fill || fill.toLowerCase() === "none") {
-      return;
+    if (fill && fill.toLowerCase() !== "none") {
+      toRecolor.push(path);
     }
+    setFillValue(path, "#ffffff");
+  });
+
+  toRecolor.forEach((path) => {
     const { x: cx, y: cy } = getPathCenterInViewBox(path);
     const color = sampleColorAt(cx, cy);
     setFillValue(path, color);
     updated += 1;
   });
 
-  setStatus(`Updated ${updated} filled hexagons.`);
+  setStatus(`Updated ${updated} filled hexagons (white base applied).`);
 }
 
 function loadImage(file) {
