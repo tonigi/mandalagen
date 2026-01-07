@@ -152,6 +152,7 @@ button:hover {
   box-shadow: 0 10px 25px var(--glow);
 }
 
+
 .stage {
   display: grid;
   gap: 12px;
