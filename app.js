@@ -1,6 +1,6 @@
 const svgLayer = document.getElementById("svgLayer");
 const imageInput = document.getElementById("imageInput");
-const overlayImage = document.getElementById("overlayImage");
+const overlayCanvas = document.getElementById("overlayCanvas");
 const opacityInput = document.getElementById("opacityInput");
 const scaleInput = document.getElementById("scaleInput");
 const translateXInput = document.getElementById("translateXInput");
@@ -12,7 +12,7 @@ const applyBtn = document.getElementById("applyBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 const resetBtn = document.getElementById("resetBtn");
 const statusEl = document.getElementById("status");
-const canvas = document.getElementById("sampleCanvas");
+const canvas = overlayCanvas;
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
 const svgPath = "data/onepage clean.svg";
@@ -163,12 +163,9 @@ function loadImage(file) {
   currentImageUrl = URL.createObjectURL(file);
   img.onload = () => {
     sourceImage = img;
-    overlayImage.src = currentImageUrl;
-    overlayImage.alt = file.name;
     canvas.width = viewBox.width;
     canvas.height = viewBox.height;
     drawImageToCanvas();
-    updateOverlayTransform();
     imageReady = true;
     setStatus("Image loaded. Ready to apply colors.");
   };
@@ -183,27 +180,21 @@ function drawImageToCanvas() {
   if (!sourceImage || !canvas.width || !canvas.height) {
     return;
   }
+  const baseScale = Math.min(
+    viewBox.width / sourceImage.width,
+    viewBox.height / sourceImage.height
+  );
+  const baseWidth = sourceImage.width * baseScale;
+  const baseHeight = sourceImage.height * baseScale;
+  const baseX = (viewBox.width - baseWidth) / 2;
+  const baseY = (viewBox.height - baseHeight) / 2;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.save();
-  ctx.translate(imageTransform.translateX, imageTransform.translateY);
-  ctx.scale(imageTransform.scale, imageTransform.scale);
-  ctx.drawImage(sourceImage, 0, 0, viewBox.width, viewBox.height);
+  ctx.translate(baseX + imageTransform.translateX, baseY + imageTransform.translateY);
+  ctx.scale(baseScale * imageTransform.scale, baseScale * imageTransform.scale);
+  ctx.drawImage(sourceImage, 0, 0);
   ctx.restore();
-}
-
-function updateOverlayTransform() {
-  if (!svgRoot) {
-    return;
-  }
-  const svgRect = svgRoot.getBoundingClientRect();
-  if (!svgRect.width || !svgRect.height) {
-    return;
-  }
-  const scale = imageTransform.scale;
-  const tx = (imageTransform.translateX / viewBox.width) * svgRect.width;
-  const ty = (imageTransform.translateY / viewBox.height) * svgRect.height;
-  overlayImage.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
 }
 
 function updateTransformValues() {
@@ -216,7 +207,6 @@ function updateTransformValues() {
   if (imageReady) {
     drawImageToCanvas();
   }
-  updateOverlayTransform();
 }
 
 function downloadSvg() {
@@ -244,12 +234,11 @@ function resetSvg() {
     return;
   }
   insertSvg(originalSvgText);
-  updateOverlayTransform();
   setStatus("SVG reset to original colors.");
 }
 
 opacityInput.addEventListener("input", (event) => {
-  overlayImage.style.opacity = event.target.value;
+  overlayCanvas.style.opacity = event.target.value;
 });
 
 scaleInput.addEventListener("input", updateTransformValues);
@@ -290,4 +279,3 @@ async function init() {
 }
 
 init();
-window.addEventListener("resize", updateOverlayTransform);
