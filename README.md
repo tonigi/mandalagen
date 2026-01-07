@@ -2,6 +2,8 @@
 
 This is a small web app that overlays a raster image onto a hexagon SVG grid and applies colors to the filled hexagons by sampling the image at each hex center.
 
+Intended to generate templates for the "Quercetti Fantacolor Mandala" toy.
+
 ## How it works
 - Load `data/onepage clean.svg` into the page.
 - Upload a PNG/JPG image.
