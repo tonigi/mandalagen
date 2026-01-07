@@ -337,15 +337,15 @@ function drawImageToCanvas() {
   );
   const baseWidth = sourceImage.width * baseScale;
   const baseHeight = sourceImage.height * baseScale;
-  const baseX = (viewBox.width - baseWidth) / 2;
-  const baseY = (viewBox.height - baseHeight) / 2;
+  const centerX = viewBox.width / 2 + imageTransform.translateX;
+  const centerY = viewBox.height / 2 + imageTransform.translateY;
   ctx.imageSmoothingEnabled = false;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.save();
-  ctx.translate(baseX + imageTransform.translateX, baseY + imageTransform.translateY);
+  ctx.translate(centerX, centerY);
   ctx.scale(baseScale * imageTransform.scale, baseScale * imageTransform.scale);
-  ctx.drawImage(sourceImage, 0, 0);
+  ctx.drawImage(sourceImage, -sourceImage.width / 2, -sourceImage.height / 2);
   ctx.restore();
 }
 
