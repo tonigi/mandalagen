@@ -4,6 +4,7 @@ const overlayCanvas = document.getElementById("overlayCanvas");
 const opacityInput = document.getElementById("opacityInput");
 const paletteSelect = document.getElementById("paletteSelect");
 const scaleInput = document.getElementById("scaleInput");
+const canvasWrap = document.getElementById("canvasWrap");
 const translateXInput = document.getElementById("translateXInput");
 const translateYInput = document.getElementById("translateYInput");
 const scaleValue = document.getElementById("scaleValue");
@@ -465,6 +466,19 @@ window.addEventListener("paste", (event) => {
       break;
     }
   }
+});
+
+canvasWrap.addEventListener("dragover", (event) => {
+  event.preventDefault();
+});
+
+canvasWrap.addEventListener("drop", (event) => {
+  event.preventDefault();
+  const file = event.dataTransfer?.files?.[0];
+  if (!file || !file.type.startsWith("image/")) {
+    return;
+  }
+  loadImage(file);
 });
 
 applyBtn.addEventListener("click", applyColors);
