@@ -16,7 +16,7 @@ const statusEl = document.getElementById("status");
 const canvas = overlayCanvas;
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-const svgPath = "data/onepage clean.svg";
+const svgPath = "data/onepage_model.svg";
 const fixedPalette = [
   { name: "red", hex: "#e53935" },
   { name: "blue", hex: "#1e88e5" },
@@ -32,13 +32,11 @@ let currentImageUrl = "";
 let sourceImage = null;
 let imageReady = false;
 let svgPalette = [];
-let paletteRgb = fixedPalette.map((entry) => ({
-  ...entry,
-  ...hexToRgb(entry.hex),
-}));
+let activePalette = [];
 let layoutReady = false;
 let isDragging = false;
 let lastPointer = { x: 0, y: 0 };
+let applyTimeout = null;
 const imageTransform = {
   scale: 1,
   translateX: 0,
@@ -195,17 +193,24 @@ function buildPaletteFromSvg(svgText) {
   return Array.from(colors.values());
 }
 
-function setPalette(mode) {
+function buildFixedPalette() {
+  return fixedPalette
+    .map((entry) => {
+      const rgb = hexToRgb(entry.hex);
+      return rgb ? { ...entry, ...rgb } : null;
+    })
+    .filter(Boolean);
+}
+
+function resolvePalette(mode) {
   if (mode === "svg" && svgPalette.length) {
-    paletteRgb = svgPalette;
-  } else {
-    paletteRgb = fixedPalette
-      .map((entry) => {
-        const rgb = hexToRgb(entry.hex);
-        return rgb ? { ...entry, ...rgb } : null;
-      })
-      .filter(Boolean);
+    return svgPalette;
   }
+  return buildFixedPalette();
+}
+
+function setPalette(mode) {
+  activePalette = resolvePalette(mode);
 }
 
 function clamp(value, min, max) {
@@ -213,12 +218,12 @@ function clamp(value, min, max) {
 }
 
 function nearestPaletteColor(r, g, b) {
-  if (!paletteRgb.length) {
+  if (!activePalette.length) {
     return "#ffffff";
   }
-  let closest = paletteRgb[0];
+  let closest = activePalette[0];
   let closestDist = Number.POSITIVE_INFINITY;
-  for (const color of paletteRgb) {
+  for (const color of activePalette) {
     const dr = r - color.r;
     const dg = g - color.g;
     const db = b - color.b;
@@ -303,6 +308,16 @@ function applyColors() {
   setStatus(`Updated ${updated} filled hexagons (white base applied).`);
 }
 
+function scheduleApplyColors(delayMs = 150) {
+  if (applyTimeout) {
+    window.clearTimeout(applyTimeout);
+  }
+  applyTimeout = window.setTimeout(() => {
+    applyTimeout = null;
+    applyColors();
+  }, delayMs);
+}
+
 function loadImage(file) {
   if (currentImageUrl) {
     URL.revokeObjectURL(currentImageUrl);
@@ -318,7 +333,8 @@ function loadImage(file) {
     translateYInput.value = "0";
     imageReady = true;
     updateTransformValues();
-    setStatus("Image loaded. Ready to apply colors.");
+    setStatus("Image loaded. Applying colors...");
+    scheduleApplyColors(0);
   };
   img.onerror = () => {
     imageReady = false;
@@ -358,6 +374,7 @@ function updateTransformValues() {
   translateYValue.textContent = `${Math.round(imageTransform.translateY)}`;
   if (imageReady) {
     drawImageToCanvas();
+    scheduleApplyColors();
   }
 }
 
@@ -395,6 +412,9 @@ opacityInput.addEventListener("input", (event) => {
 
 paletteSelect.addEventListener("change", (event) => {
   setPalette(event.target.value);
+  if (imageReady) {
+    scheduleApplyColors();
+  }
 });
 
 scaleInput.addEventListener("input", updateTransformValues);
@@ -453,6 +473,23 @@ function endDrag(event) {
 overlayCanvas.addEventListener("pointerup", endDrag);
 overlayCanvas.addEventListener("pointercancel", endDrag);
 overlayCanvas.addEventListener("pointerleave", endDrag);
+overlayCanvas.addEventListener(
+  "wheel",
+  (event) => {
+    if (!imageReady) {
+      return;
+    }
+    event.preventDefault();
+    const scaleMin = Number(scaleInput.min);
+    const scaleMax = Number(scaleInput.max);
+    const current = Number(scaleInput.value);
+    const factor = 1 - event.deltaY * 0.001;
+    const next = clamp(current * factor, scaleMin, scaleMax);
+    scaleInput.value = `${next}`;
+    updateTransformValues();
+  },
+  { passive: false }
+);
 
 imageInput.addEventListener("change", (event) => {
   const file = event.target.files[0];
@@ -460,6 +497,22 @@ imageInput.addEventListener("change", (event) => {
     return;
   }
   loadImage(file);
+});
+
+window.addEventListener("paste", (event) => {
+  const items = event.clipboardData?.items;
+  if (!items) {
+    return;
+  }
+  for (const item of items) {
+    if (item.type && item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) {
+        loadImage(file);
+      }
+      break;
+    }
+  }
 });
 
 applyBtn.addEventListener("click", applyColors);
