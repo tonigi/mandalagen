@@ -35,6 +35,15 @@
         </label>
 
         <label class="control">
+          <span>Dithering</span>
+          <select id="ditherSelect">
+            <option value="none">None</option>
+            <option value="ordered">Ordered</option>
+            <option value="floyd-steinberg">Floyd-Steinberg</option>
+          </select>
+        </label>
+
+        <label class="control">
           <span>Image scale <strong class="value" id="scaleValue">100%</strong></span>
           <input type="range" id="scaleInput" min="0.4" max="2" step="0.05" value="1" />
         </label>

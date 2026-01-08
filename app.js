@@ -3,6 +3,7 @@ const imageInput = document.getElementById("imageInput");
 const overlayCanvas = document.getElementById("overlayCanvas");
 const opacityInput = document.getElementById("opacityInput");
 const paletteSelect = document.getElementById("paletteSelect");
+const ditherSelect = document.getElementById("ditherSelect");
 const scaleInput = document.getElementById("scaleInput");
 const canvasWrap = document.getElementById("canvasWrap");
 const translateXInput = document.getElementById("translateXInput");
@@ -18,6 +19,13 @@ const canvas = overlayCanvas;
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
 const svgPath = "data/onepage_model.svg";
+const BAYER_4X4 = [
+  [0, 8, 2, 10],
+  [12, 4, 14, 6],
+  [3, 11, 1, 9],
+  [15, 7, 13, 5],
+];
+const DITHER_STRENGTH = 48;
 const palettes = {
   purple: [
     { name: "azure blue", hex: "#1496dc" },
@@ -47,6 +55,8 @@ let layoutReady = false;
 let isDragging = false;
 let lastPointer = { x: 0, y: 0 };
 let applyTimeout = null;
+let ditherMode = "none";
+let ditheredBuffer = null;
 const imageTransform = {
   scale: 1,
   translateX: 0,
@@ -169,9 +179,9 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function nearestPaletteColor(r, g, b) {
+function nearestPaletteEntry(r, g, b) {
   if (!activePalette.length) {
-    return "#ffffff";
+    return { name: "white", hex: "#ffffff", r: 255, g: 255, b: 255 };
   }
   let closest = activePalette[0];
   let closestDist = Number.POSITIVE_INFINITY;
@@ -185,17 +195,118 @@ function nearestPaletteColor(r, g, b) {
       closest = color;
     }
   }
-  return closest.hex;
+  return closest;
+}
+
+function orderedDitherOffset(x, y) {
+  const size = BAYER_4X4.length;
+  const value = BAYER_4X4[y % size][x % size];
+  const normalized = value / (size * size) - 0.5;
+  return normalized * DITHER_STRENGTH;
+}
+
+function buildFloydSteinbergBuffer() {
+  const width = canvas.width;
+  const height = canvas.height;
+  if (!width || !height) {
+    return null;
+  }
+  const data = ctx.getImageData(0, 0, width, height).data;
+  const count = width * height;
+  const workR = new Float32Array(count);
+  const workG = new Float32Array(count);
+  const workB = new Float32Array(count);
+  const workA = new Uint8ClampedArray(count);
+  for (let i = 0; i < count; i += 1) {
+    const offset = i * 4;
+    workR[i] = data[offset];
+    workG[i] = data[offset + 1];
+    workB[i] = data[offset + 2];
+    workA[i] = data[offset + 3];
+  }
+  const output = new Uint8ClampedArray(count * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = y * width + x;
+      const alpha = workA[idx];
+      if (alpha === 0) {
+        const outOffset = idx * 4;
+        output[outOffset] = 255;
+        output[outOffset + 1] = 255;
+        output[outOffset + 2] = 255;
+        output[outOffset + 3] = 0;
+        continue;
+      }
+      const entry = nearestPaletteEntry(workR[idx], workG[idx], workB[idx]);
+      const outOffset = idx * 4;
+      output[outOffset] = entry.r;
+      output[outOffset + 1] = entry.g;
+      output[outOffset + 2] = entry.b;
+      output[outOffset + 3] = alpha;
+      const errR = workR[idx] - entry.r;
+      const errG = workG[idx] - entry.g;
+      const errB = workB[idx] - entry.b;
+      const right = x + 1;
+      const down = y + 1;
+      if (right < width) {
+        const i1 = idx + 1;
+        workR[i1] += errR * (7 / 16);
+        workG[i1] += errG * (7 / 16);
+        workB[i1] += errB * (7 / 16);
+      }
+      if (down < height) {
+        const i2 = idx + width;
+        workR[i2] += errR * (5 / 16);
+        workG[i2] += errG * (5 / 16);
+        workB[i2] += errB * (5 / 16);
+        if (x > 0) {
+          const i3 = idx + width - 1;
+          workR[i3] += errR * (3 / 16);
+          workG[i3] += errG * (3 / 16);
+          workB[i3] += errB * (3 / 16);
+        }
+        if (right < width) {
+          const i4 = idx + width + 1;
+          workR[i4] += errR * (1 / 16);
+          workG[i4] += errG * (1 / 16);
+          workB[i4] += errB * (1 / 16);
+        }
+      }
+    }
+  }
+  return { data: output, width, height };
 }
 
 function sampleColorAt(x, y) {
   const ix = Math.max(0, Math.min(Math.round(x), canvas.width - 1));
   const iy = Math.max(0, Math.min(Math.round(y), canvas.height - 1));
+  if (ditherMode === "floyd-steinberg" && ditheredBuffer) {
+    const offset = (iy * ditheredBuffer.width + ix) * 4;
+    const alpha = ditheredBuffer.data[offset + 3];
+    if (alpha === 0) {
+      return "#ffffff";
+    }
+    const entry = nearestPaletteEntry(
+      ditheredBuffer.data[offset],
+      ditheredBuffer.data[offset + 1],
+      ditheredBuffer.data[offset + 2]
+    );
+    return entry.hex;
+  }
   const data = ctx.getImageData(ix, iy, 1, 1).data;
   if (data[3] === 0) {
     return "#ffffff";
   }
-  return nearestPaletteColor(data[0], data[1], data[2]);
+  let r = data[0];
+  let g = data[1];
+  let b = data[2];
+  if (ditherMode === "ordered") {
+    const offset = orderedDitherOffset(ix, iy);
+    r = clamp(r + offset, 0, 255);
+    g = clamp(g + offset, 0, 255);
+    b = clamp(b + offset, 0, 255);
+  }
+  return nearestPaletteEntry(r, g, b).hex;
 }
 
 function getPathCenterInViewBox(path) {
@@ -237,6 +348,10 @@ function applyColors() {
     return;
   }
   drawImageToCanvas();
+  ditheredBuffer = null;
+  if (ditherMode === "floyd-steinberg") {
+    ditheredBuffer = buildFloydSteinbergBuffer();
+  }
 
   const paths = svgRoot.querySelectorAll("path");
   const toRecolor = [];
@@ -369,6 +484,12 @@ paletteSelect.addEventListener("change", (event) => {
   }
 });
 
+ditherSelect.addEventListener("change", (event) => {
+  ditherMode = event.target.value;
+  if (imageReady) {
+    scheduleApplyColors();
+  }
+});
 
 scaleInput.addEventListener("input", updateTransformValues);
 translateXInput.addEventListener("input", updateTransformValues);
@@ -494,6 +615,7 @@ async function init() {
     originalSvgText = await response.text();
     insertSvg(originalSvgText);
     setPalette(paletteSelect?.value);
+    ditherMode = ditherSelect?.value || "none";
     const translateRangeX = Math.round(viewBox.width * 0.35);
     const translateRangeY = Math.round(viewBox.height * 0.35);
     translateXInput.min = -translateRangeX;
