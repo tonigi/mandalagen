@@ -17,21 +17,30 @@ const canvas = overlayCanvas;
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
 const svgPath = "data/onepage_model.svg";
-const fixedPalette = [
-  { name: "red", hex: "#e53935" },
-  { name: "blue", hex: "#1e88e5" },
-  { name: "orange", hex: "#fb8c00" },
-  { name: "lightblue", hex: "#4fc3f7" },
-  { name: "yellow", hex: "#fdd835" },
-  { name: "white", hex: "#ffffff" },
-];
+const palettes = {
+  purple: [
+    { name: "azure blue", hex: "#1496dc" },
+    { name: "royal purple", hex: "#6432aa" },
+    { name: "white", hex: "#ffffff" },
+    { name: "crimson red", hex: "#eb0000" },
+    { name: "vermilion orange", hex: "#ff6e32" },
+    { name: "golden yellow", hex: "#ffe100" },
+  ],
+  blue: [
+    { name: "azure blue", hex: "#1496dc" },
+    { name: "blue", hex: "#0000ff" },
+    { name: "white", hex: "#ffffff" },
+    { name: "crimson red", hex: "#eb0000" },
+    { name: "vermilion orange", hex: "#ff6e32" },
+    { name: "golden yellow", hex: "#ffe100" },
+  ],
+};
 let originalSvgText = "";
 let svgRoot = null;
 let viewBox = { width: 0, height: 0 };
 let currentImageUrl = "";
 let sourceImage = null;
 let imageReady = false;
-let svgPalette = [];
 let activePalette = [];
 let layoutReady = false;
 let isDragging = false;
@@ -114,12 +123,6 @@ function setFillValue(el, color) {
   }
 }
 
-function rgbToHex(r, g, b) {
-  return `#${[r, g, b]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
 function normalizeHex(hex) {
   const value = hex.replace("#", "").trim();
   if (value.length === 3) {
@@ -147,54 +150,9 @@ function hexToRgb(hex) {
   };
 }
 
-function parseRgbString(value) {
-  const match = value.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/i);
-  if (!match) {
-    return null;
-  }
-  return {
-    r: Number(match[1]),
-    g: Number(match[2]),
-    b: Number(match[3]),
-  };
-}
-
-function colorToRgb(value) {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (trimmed.startsWith("#")) {
-    return hexToRgb(trimmed);
-  }
-  if (trimmed.toLowerCase().startsWith("rgb")) {
-    return parseRgbString(trimmed);
-  }
-  return null;
-}
-
-function buildPaletteFromSvg(svgText) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(svgText, "image/svg+xml");
-  const paths = doc.querySelectorAll("path");
-  const colors = new Map();
-  paths.forEach((path) => {
-    const fill = getFillValue(path);
-    if (!fill || fill.toLowerCase() === "none") {
-      return;
-    }
-    const rgb = colorToRgb(fill);
-    if (!rgb) {
-      return;
-    }
-    const hex = rgbToHex(rgb.r, rgb.g, rgb.b).toLowerCase();
-    colors.set(hex, { name: hex, hex, ...rgb });
-  });
-  return Array.from(colors.values());
-}
-
-function buildFixedPalette() {
-  return fixedPalette
+function buildFixedPalette(mode) {
+  const palette = palettes[mode] || palettes.purple;
+  return palette
     .map((entry) => {
       const rgb = hexToRgb(entry.hex);
       return rgb ? { ...entry, ...rgb } : null;
@@ -202,15 +160,8 @@ function buildFixedPalette() {
     .filter(Boolean);
 }
 
-function resolvePalette(mode) {
-  if (mode === "svg" && svgPalette.length) {
-    return svgPalette;
-  }
-  return buildFixedPalette();
-}
-
 function setPalette(mode) {
-  activePalette = resolvePalette(mode);
+  activePalette = buildFixedPalette(mode);
 }
 
 function clamp(value, min, max) {
@@ -417,6 +368,7 @@ paletteSelect.addEventListener("change", (event) => {
   }
 });
 
+
 scaleInput.addEventListener("input", updateTransformValues);
 translateXInput.addEventListener("input", updateTransformValues);
 translateYInput.addEventListener("input", updateTransformValues);
@@ -527,8 +479,7 @@ async function init() {
     }
     originalSvgText = await response.text();
     insertSvg(originalSvgText);
-    svgPalette = buildPaletteFromSvg(originalSvgText);
-    setPalette(paletteSelect.value);
+    setPalette(paletteSelect?.value);
     const translateRangeX = Math.round(viewBox.width * 0.35);
     const translateRangeY = Math.round(viewBox.height * 0.35);
     translateXInput.min = -translateRangeX;
