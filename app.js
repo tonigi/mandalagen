@@ -198,84 +198,36 @@ function nearestPaletteEntry(r, g, b) {
   return closest;
 }
 
+// 1. UPDATED: Handle float coordinates for Hex positioning
 function orderedDitherOffset(x, y) {
   const size = BAYER_4X4.length;
-  const value = BAYER_4X4[y % size][x % size];
+  // Map screen coordinates to integer pattern coordinates
+  const mx = Math.floor(x);
+  const my = Math.floor(y);
+  
+  // Safe modulo for potentially negative coordinates
+  const col = ((mx % size) + size) % size;
+  const row = ((my % size) + size) % size;
+  
+  const value = BAYER_4X4[row][col];
   const normalized = value / (size * size) - 0.5;
   return normalized * DITHER_STRENGTH;
 }
 
-function buildFloydSteinbergBuffer() {
-  const width = canvas.width;
-  const height = canvas.height;
-  if (!width || !height) {
-    return null;
-  }
-  const data = ctx.getImageData(0, 0, width, height).data;
-  const count = width * height;
-  const workR = new Float32Array(count);
-  const workG = new Float32Array(count);
-  const workB = new Float32Array(count);
-  const workA = new Uint8ClampedArray(count);
-  for (let i = 0; i < count; i += 1) {
-    const offset = i * 4;
-    workR[i] = data[offset];
-    workG[i] = data[offset + 1];
-    workB[i] = data[offset + 2];
-    workA[i] = data[offset + 3];
-  }
-  const output = new Uint8ClampedArray(count * 4);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const idx = y * width + x;
-      const alpha = workA[idx];
-      if (alpha === 0) {
-        const outOffset = idx * 4;
-        output[outOffset] = 255;
-        output[outOffset + 1] = 255;
-        output[outOffset + 2] = 255;
-        output[outOffset + 3] = 0;
-        continue;
-      }
-      const entry = nearestPaletteEntry(workR[idx], workG[idx], workB[idx]);
-      const outOffset = idx * 4;
-      output[outOffset] = entry.r;
-      output[outOffset + 1] = entry.g;
-      output[outOffset + 2] = entry.b;
-      output[outOffset + 3] = alpha;
-      const errR = workR[idx] - entry.r;
-      const errG = workG[idx] - entry.g;
-      const errB = workB[idx] - entry.b;
-      const right = x + 1;
-      const down = y + 1;
-      if (right < width) {
-        const i1 = idx + 1;
-        workR[i1] += errR * (7 / 16);
-        workG[i1] += errG * (7 / 16);
-        workB[i1] += errB * (7 / 16);
-      }
-      if (down < height) {
-        const i2 = idx + width;
-        workR[i2] += errR * (5 / 16);
-        workG[i2] += errG * (5 / 16);
-        workB[i2] += errB * (5 / 16);
-        if (x > 0) {
-          const i3 = idx + width - 1;
-          workR[i3] += errR * (3 / 16);
-          workG[i3] += errG * (3 / 16);
-          workB[i3] += errB * (3 / 16);
-        }
-        if (right < width) {
-          const i4 = idx + width + 1;
-          workR[i4] += errR * (1 / 16);
-          workG[i4] += errG * (1 / 16);
-          workB[i4] += errB * (1 / 16);
-        }
-      }
-    }
-  }
-  return { data: output, width, height };
+// 2. REPLACED: Logic now runs on Path list, not Pixel buffer
+// Remove 'buildFloydSteinbergBuffer' entirely. It is not used in this approach.
+
+// 3. UPDATED: Simply samples raw image data (dithering is now handled in applyColors)
+function sampleRawColorAt(x, y) {
+  const ix = Math.max(0, Math.min(Math.round(x), canvas.width - 1));
+  const iy = Math.max(0, Math.min(Math.round(y), canvas.height - 1));
+  const data = ctx.getImageData(ix, iy, 1, 1).data;
+  
+  // Return null if transparent, otherwise object
+  if (data[3] === 0) return null;
+  return { r: data[0], g: data[1], b: data[2] };
 }
+
 
 function sampleColorAt(x, y) {
   const ix = Math.max(0, Math.min(Math.round(x), canvas.width - 1));
@@ -325,21 +277,11 @@ function getPathCenterInViewBox(path) {
   };
 }
 
+// 4. REWRITTEN: Hex-Aware Dithering Implementation
 function applyColors() {
-  if (!svgRoot) {
-    setStatus("SVG not loaded yet.");
-    return;
-  }
-  if (!imageReady) {
-    setStatus("Load an image before applying colors.");
-    return;
-  }
-  if (!canvas.width || !canvas.height) {
-    setStatus("Image not ready yet.");
-    return;
-  }
-  const svgRect = svgRoot.getBoundingClientRect();
-  if (!svgRect.width || !svgRect.height || !layoutReady) {
+  if (!svgRoot || !imageReady || !canvas.width || !canvas.height) return;
+
+  if (!layoutReady) {
     setStatus("Preparing layout...");
     requestAnimationFrame(() => {
       layoutReady = true;
@@ -347,32 +289,126 @@ function applyColors() {
     });
     return;
   }
+
   drawImageToCanvas();
-  ditheredBuffer = null;
-  if (ditherMode === "floyd-steinberg") {
-    ditheredBuffer = buildFloydSteinbergBuffer();
-  }
 
-  const paths = svgRoot.querySelectorAll("path");
-  const toRecolor = [];
-  let updated = 0;
+  const paths = Array.from(svgRoot.querySelectorAll("path"));
+  const nodes = [];
 
+  // Step 1: Extract data and source colors for all relevant paths
   paths.forEach((path) => {
     const fill = getFillValue(path);
-    if (fill && fill.toLowerCase() !== "none") {
-      toRecolor.push(path);
-    }
+    if (!fill || fill.toLowerCase() === "none") return;
+    
+    // Reset to base
     setFillValue(path, "#ffffff");
-  });
 
-  toRecolor.forEach((path) => {
-    const { x: cx, y: cy } = getPathCenterInViewBox(path);
-    const color = sampleColorAt(cx, cy);
-    setFillValue(path, color);
-    updated += 1;
-  });
+    const center = getPathCenterInViewBox(path);
+    const raw = sampleRawColorAt(center.x, center.y);
 
-  setStatus(`Updated ${updated} filled hexagons (white base applied).`);
+    if (raw) {
+      nodes.push({
+        path: path,
+        x: center.x,
+        y: center.y,
+        r: raw.r,
+        g: raw.g,
+        b: raw.b,
+        errR: 0, 
+        errG: 0, 
+        errB: 0
+      });
+    }
+  });
+  
+  // Step 2: Sort nodes spatially (Top->Bottom, then Left->Right)
+  // This mimics the scanline required for Error Diffusion
+  nodes.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+
+  // Step 3: Calculate Hex Grid Radius (for finding neighbors)
+  // We approximate the grid size by checking the closest distance in a small sample
+  let gridRadius = 20; // fallback
+  if (nodes.length > 1) {
+    let minD = Infinity;
+    // Check first 50 nodes to estimate neighbor distance
+    for (let i = 0; i < Math.min(nodes.length, 50); i++) {
+        const next = nodes[i+1];
+        if(!next) break;
+        const d = Math.hypot(nodes[i].x - next.x, nodes[i].y - next.y);
+        if (d < minD && d > 1) minD = d;
+    }
+    // Search radius is slightly larger than the distance between hex centers
+    gridRadius = minD * 1.5;
+  }
+
+  let updated = 0;
+
+  // Step 4: Process Dithering
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    
+    let r = node.r + node.errR;
+    let g = node.g + node.errG;
+    let b = node.b + node.errB;
+
+    if (ditherMode === "ordered") {
+      // Apply Bayer matrix based on screen coordinates of the Hex center
+      const offset = orderedDitherOffset(node.x, node.y);
+      r += offset;
+      g += offset;
+      b += offset;
+    }
+
+    // Clamp
+    r = clamp(r, 0, 255);
+    g = clamp(g, 0, 255);
+    b = clamp(b, 0, 255);
+
+    // Quantize
+    const entry = nearestPaletteEntry(r, g, b);
+    setFillValue(node.path, entry.hex);
+    updated++;
+
+    // Error Diffusion (Floyd-Steinberg adapted for Hex/Irregular grids)
+    if (ditherMode === "floyd-steinberg") {
+      const eR = r - entry.r;
+      const eG = g - entry.g;
+      const eB = b - entry.b;
+
+      // Find neighbors in the "future" (down/right) within gridRadius
+      // Since array is sorted by Y, we only look forward.
+      for (let j = i + 1; j < nodes.length; j++) {
+        const neighbor = nodes[j];
+        
+        // Optimization: Stop searching if Y difference is too large
+        if (neighbor.y > node.y + gridRadius) break;
+
+        const dx = neighbor.x - node.x;
+        const dy = neighbor.y - node.y;
+        const distSq = dx * dx + dy * dy;
+
+        if (distSq < gridRadius * gridRadius) {
+          // Distribute error based on direction (Simplified Hex weights)
+          let weight = 0;
+
+          // Directly Right
+          if (dx > 0 && Math.abs(dy) < gridRadius / 3) weight = 7 / 16;
+          // Bottom Left
+          else if (dx < 0 && dy > 0) weight = 3 / 16;
+          // Bottom / Bottom Right
+          else if (dy > 0) weight = 5 / 16; // Combined remaining weight
+          
+          if (weight > 0) {
+            neighbor.errR += eR * weight;
+            neighbor.errG += eG * weight;
+            neighbor.errB += eB * weight;
+          }
+        }
+      }
+    }
+  }
+
+  setStatus(`Updated ${updated} hexagons.`);
 }
 
 function scheduleApplyColors(delayMs = 150) {
