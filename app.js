@@ -1,3 +1,46 @@
+import {
+  RANDOM_MOTIFS,
+  RANDOM_MOTIF_DESCRIPTIONS,
+  RANDOM_SYMMETRIES,
+  svgPath
+} from './constants.js';
+
+import {
+  clamp,
+  hashString,
+  mulberry32,
+  getPathCenterInViewBox
+} from './utils.js';
+
+import {
+  parseViewBox,
+  setFillValue,
+  getColorableHexPaths,
+  inferHexGridCoordinates
+} from './svg-engine.js';
+
+import {
+  buildFixedPalette
+} from './color-engine.js';
+
+import {
+  setStatus,
+  updateColorCounts
+} from './ui-engine.js';
+
+import {
+  drawImageToCanvas,
+  applyColors
+} from './image-engine.js';
+
+import {
+  getSymmetryConfig,
+  getSymmetryKey,
+  getMetricsForNode,
+  resolveRandomFill
+} from './pattern-engine.js';
+
+// DOM Elements
 const svgLayer = document.getElementById("svgLayer");
 const imageInput = document.getElementById("imageInput");
 const overlayCanvas = document.getElementById("overlayCanvas");
@@ -17,6 +60,7 @@ const resetBtn = document.getElementById("resetBtn");
 const statusEl = document.getElementById("status");
 const canvas = overlayCanvas;
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
 const colorCountsEl = document.createElement("div");
 colorCountsEl.id = "colorCounts";
 colorCountsEl.className = "status";
@@ -27,55 +71,7 @@ colorCountsEl.style.gap = "8px";
 colorCountsEl.style.marginTop = "8px";
 statusEl.insertAdjacentElement("afterend", colorCountsEl);
 
-const svgPath = "data/onepage_model.svg";
-
-const RANDOM_MOTIFS = ["auto", "flower", "star", "ribbons", "diamonds", "petals", "mosaic"];
-const RANDOM_MOTIF_DESCRIPTIONS = {
-  auto: "Picks one motif family from the seed.",
-  flower: "Radial lobes with soft ring variation.",
-  star: "Spoke-like rays from the center.",
-  ribbons: "Diagonal bands crossing the grid.",
-  diamonds: "Lattice-like diamond structure.",
-  petals: "Tighter petal lobes with ring accents.",
-  mosaic: "Patchy, noisy cell clusters.",
-};
-const RANDOM_SYMMETRIES = [
-  { value: "c6-mirror-vertex", label: "C6 mirrored through vertices", order: 6, offset: 0, mirror: true },
-  { value: "c6-mirror-side", label: "C6 mirrored through sides", order: 6, offset: Math.PI / 6, mirror: true },
-  { value: "c6", label: "C6 rotational", order: 6, offset: 0, mirror: false },
-  { value: "c3-vertex", label: "C3 through vertices", order: 3, offset: 0, mirror: true },
-  { value: "c3-side", label: "C3 through sides", order: 3, offset: Math.PI / 3, mirror: true },
-  { value: "c3", label: "C3 rotational", order: 3, offset: 0, mirror: false },
-  { value: "c2-vertex", label: "C2 through vertices", order: 2, offset: 0, mirror: true },
-  { value: "c2-side", label: "C2 through sides", order: 2, offset: Math.PI / 6, mirror: true },
-  { value: "c2", label: "C2 rotational", order: 2, offset: 0, mirror: false },
-  { value: "none", label: "No enforced symmetry", order: 1, offset: 0, mirror: false },
-];
-const BAYER_4X4 = [
-  [0, 8, 2, 10],
-  [12, 4, 14, 6],
-  [3, 11, 1, 9],
-  [15, 7, 13, 5],
-];
-const DITHER_STRENGTH = 48;
-const palettes = {
-  purple: [
-    { name: "azure blue", hex: "#1496dc" },
-    { name: "royal purple", hex: "#6432aa" },
-    { name: "white", hex: "#ffffff" },
-    { name: "crimson red", hex: "#eb0000" },
-    { name: "vermilion orange", hex: "#ff6e32" },
-    { name: "golden yellow", hex: "#ffe100" },
-  ],
-  blue: [
-    { name: "azure blue", hex: "#1496dc" },
-    { name: "blue", hex: "#0000ff" },
-    { name: "white", hex: "#ffffff" },
-    { name: "crimson red", hex: "#eb0000" },
-    { name: "vermilion orange", hex: "#ff6e32" },
-    { name: "golden yellow", hex: "#ffe100" },
-  ],
-};
+// State
 let originalSvgText = "";
 let svgRoot = null;
 let viewBox = { width: 0, height: 0 };
@@ -88,74 +84,17 @@ let isDragging = false;
 let lastPointer = { x: 0, y: 0 };
 let applyTimeout = null;
 let ditherMode = "none";
-let ditheredBuffer = null;
+
 const imageTransform = {
   scale: 1,
   translateX: 0,
   translateY: 0,
 };
 
-function setStatus(message) {
-  statusEl.textContent = message;
-}
-
-function getColorName(hex) {
-  const normalized = normalizeHex(hex);
-  for (const palette of Object.values(palettes)) {
-    const match = palette.find((entry) => normalizeHex(entry.hex) === normalized);
-    if (match) return match.name;
-  }
-  return normalized;
-}
-
-function updateColorCounts() {
-  if (!svgRoot) {
-    colorCountsEl.textContent = "";
-    return;
-  }
-
-  const counts = new Map();
-  for (const path of getColorableHexPaths()) {
-    const fill = normalizeHex(getFillValue(path));
-    if (!fill) continue;
-    counts.set(fill, (counts.get(fill) || 0) + 1);
-  }
-
-  if (!counts.size) {
-    colorCountsEl.textContent = "";
-    return;
-  }
-
-  const paletteOrder = buildFixedPalette(paletteSelect?.value || "purple").map((entry) => entry.hex);
-  const orderedColors = [
-    ...paletteOrder.filter((hex) => counts.has(hex)),
-    ...Array.from(counts.keys())
-      .filter((hex) => !paletteOrder.includes(hex))
-      .sort(),
-  ];
-
-  colorCountsEl.innerHTML = orderedColors
-    .map((hex) => {
-      const count = counts.get(hex);
-      const label = getColorName(hex);
-      return `<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--panel-edge);border-radius:999px;background:#fff;padding:4px 8px;font-size:12px;"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,0.25);background:${hex};"></span>${label}: ${count}</span>`;
-    })
-    .join("");
-}
-
-function parseViewBox(svg) {
-  const viewBoxAttr = svg.getAttribute("viewBox");
-  if (!viewBoxAttr) {
-    return { width: Number(svg.getAttribute("width")) || 0, height: Number(svg.getAttribute("height")) || 0 };
-  }
-  const parts = viewBoxAttr.split(/\s+/).map(Number);
-  return { width: parts[2] || 0, height: parts[3] || 0 };
-}
-
+// Functions
 function updateStageAspect() {
-  const wrap = document.getElementById("canvasWrap");
   if (viewBox.width && viewBox.height) {
-    wrap.style.aspectRatio = `${viewBox.width} / ${viewBox.height}`;
+    canvasWrap.style.aspectRatio = `${viewBox.width} / ${viewBox.height}`;
   }
 }
 
@@ -173,566 +112,20 @@ function insertSvg(svgText) {
   svgLayer.appendChild(svgRoot);
 }
 
-function getFillValue(el) {
-  const style = el.getAttribute("style");
-  if (style) {
-    const parts = style.split(";").map((part) => part.trim()).filter(Boolean);
-    for (const part of parts) {
-      const [key, value] = part.split(":");
-      if (key && key.trim() === "fill") {
-        return value.trim();
-      }
-    }
-  }
-  const fill = el.getAttribute("fill");
-  return fill ? fill.trim() : "";
-}
-
-function setFillValue(el, color) {
-  const style = el.getAttribute("style");
-  if (style) {
-    const parts = style.split(";").map((part) => part.trim()).filter(Boolean);
-    let found = false;
-    const next = parts.map((part) => {
-      const [key, value] = part.split(":");
-      if (key && key.trim() === "fill") {
-        found = true;
-        return `fill:${color}`;
-      }
-      return value ? `${key}:${value}` : part;
-    });
-    if (!found) {
-      next.push(`fill:${color}`);
-    }
-    el.setAttribute("style", `${next.join(";")};`);
-  } else {
-    el.setAttribute("fill", color);
-  }
-}
-
-function normalizeHex(hex) {
-  const value = hex.replace("#", "").trim();
-  if (value.length === 3) {
-    return `#${value
-      .split("")
-      .map((part) => part + part)
-      .join("")}`.toLowerCase();
-  }
-  if (value.length === 6) {
-    return `#${value}`.toLowerCase();
-  }
-  return "";
-}
-
-function hexToRgb(hex) {
-  const normalized = normalizeHex(hex).replace("#", "");
-  if (!normalized) {
-    return null;
-  }
-  const int = Number.parseInt(normalized, 16);
-  return {
-    r: (int >> 16) & 255,
-    g: (int >> 8) & 255,
-    b: int & 255,
-  };
-}
-
-function buildFixedPalette(mode) {
-  const palette = palettes[mode] || palettes.purple;
-  return palette
-    .map((entry) => {
-      const rgb = hexToRgb(entry.hex);
-      return rgb ? { ...entry, ...rgb } : null;
-    })
-    .filter(Boolean);
-}
-
-function setPalette(mode) {
-  activePalette = buildFixedPalette(mode);
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function hashString(input) {
-  let h = 1779033703 ^ input.length;
-  for (let i = 0; i < input.length; i += 1) {
-    h = Math.imul(h ^ input.charCodeAt(i), 3432918353);
-    h = (h << 13) | (h >>> 19);
-  }
-  return () => {
-    h = Math.imul(h ^ (h >>> 16), 2246822507);
-    h = Math.imul(h ^ (h >>> 13), 3266489909);
-    return (h ^= h >>> 16) >>> 0;
-  };
-}
-
-function mulberry32(seed) {
-  return function random() {
-    let t = (seed += 0x6d2b79f5);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function mod(n, m) {
-  return ((n % m) + m) % m;
-}
-
-function clamp01(v) {
-  return clamp(v, 0, 1);
-}
-
-function randomMotifValue(kind, metrics, phases) {
-  const { radial, angleNorm, mirrorNorm, ring, q, r, theta } = metrics;
-  const [p1, p2, p3, p4] = phases;
-
-  const flower =
-    0.62 * Math.cos(mirrorNorm * Math.PI * 3 + p1) +
-    0.45 * Math.sin(radial * 11 + p2) +
-    0.25 * Math.cos(ring * 0.82 + p3);
-
-  const star =
-    0.72 * Math.cos(angleNorm * Math.PI * 2 + p1) * (1 - radial * 0.6) +
-    0.35 * Math.sin(radial * 14 + p2) +
-    0.2 * Math.cos(ring * 0.75 + p3);
-
-  const ribbons =
-    0.45 * Math.sin((q - r) * 0.82 + p1) +
-    0.4 * Math.cos((q + 2 * r) * 0.55 + p2) +
-    0.3 * Math.sin(angleNorm * Math.PI * 5 + radial * 8 + p3);
-
-  const diamonds =
-    0.45 * Math.cos((q + r) * 0.82 + p1) +
-    0.45 * Math.cos((q - r) * 0.82 + p2) +
-    0.32 * Math.cos(mirrorNorm * Math.PI * 6 + radial * 7 + p3);
-
-  const petals =
-    0.62 * Math.cos(mirrorNorm * Math.PI * 5 + p1) * (1 - radial * 0.35) +
-    0.4 * Math.cos(radial * 9 + p2) +
-    0.25 * Math.cos(angleNorm * Math.PI * 4 + p3);
-
-  const mosaic =
-    0.35 * Math.sin(q * 0.92 + p1) +
-    0.35 * Math.cos(r * 0.9 + p2) +
-    0.2 * Math.sin((q + r) * 0.63 + p3) +
-    0.18 * Math.cos(radial * 15 + p4);
-
-  if (kind === "flower") return flower;
-  if (kind === "star") return star;
-  if (kind === "ribbons") return ribbons;
-  if (kind === "diamonds") return diamonds;
-  if (kind === "petals") return petals;
-  if (kind === "mosaic") return mosaic;
-
-  return 0.32 * flower + 0.28 * star + 0.2 * ribbons + 0.2 * diamonds;
-}
-
-function inferHexGridCoordinates(nodes) {
-  const sorted = [...nodes].sort((a, b) => a.y - b.y || a.x - b.x);
-  let rowIndex = -1;
-  let currentRowY = Number.NEGATIVE_INFINITY;
-  const rowTolerance = viewBox.height * 0.006;
-
-  for (const node of sorted) {
-    if (Math.abs(node.y - currentRowY) > rowTolerance) {
-      rowIndex += 1;
-      currentRowY = node.y;
-    }
-    node.r = rowIndex;
-  }
-
-  const rows = new Map();
-  for (const node of sorted) {
-    if (!rows.has(node.r)) rows.set(node.r, []);
-    rows.get(node.r).push(node);
-  }
-  for (const row of rows.values()) {
-    row.sort((a, b) => a.x - b.x);
-    row.forEach((node, index) => {
-      node.q = index - Math.floor(row.length / 2);
-    });
-  }
-}
-
-function getColorableHexPaths() {
-  if (!svgRoot) return [];
-  return Array.from(svgRoot.querySelectorAll("path")).filter((path) => {
-    const fill = getFillValue(path);
-    return fill && fill.toLowerCase() !== "none";
+function handleApplyColors() {
+  applyColors({
+    svgRoot,
+    imageReady,
+    canvas,
+    ctx,
+    viewBox,
+    ditherMode,
+    activePalette,
+    sourceImage,
+    imageTransform,
+    onStatusUpdate: (msg) => setStatus(statusEl, msg),
+    onComplete: () => updateColorCounts(svgRoot, colorCountsEl, paletteSelect?.value)
   });
-}
-
-function getSymmetryConfig(value) {
-  return RANDOM_SYMMETRIES.find((entry) => entry.value === value) || RANDOM_SYMMETRIES[0];
-}
-
-function getSymmetryCoordinates(theta, symmetry) {
-  const period = (Math.PI * 2) / symmetry.order;
-  const local = mod(theta - symmetry.offset, period);
-  const canonical = symmetry.mirror ? Math.min(local, period - local) : local;
-  return {
-    angleNorm: period ? canonical / period : 0,
-    mirrorNorm: symmetry.mirror && period ? canonical / (period / 2) : canonical / period,
-  };
-}
-
-function getSymmetryKey(node, center, maxRadius, symmetry) {
-  if (symmetry.value === "none") {
-    return `${node.q}:${node.r}`;
-  }
-  const dx = node.x - center.x;
-  const dy = node.y - center.y;
-  const theta = Math.atan2(dy, dx);
-  const radialBucket = Math.round((Math.hypot(dx, dy) / maxRadius) * 120);
-  const coords = getSymmetryCoordinates(theta, symmetry);
-  const angleBucket = Math.round(coords.angleNorm * 120);
-  return `${radialBucket}:${angleBucket}`;
-}
-
-function getMetricsForNode(node, center, maxRadius, symmetry) {
-  const dx = node.x - center.x;
-  const dy = node.y - center.y;
-  const theta = Math.atan2(dy, dx);
-  const radial = clamp01(Math.hypot(dx, dy) / maxRadius);
-  if (symmetry.value === "none") {
-    return {
-      radial,
-      angleNorm: mod(theta, Math.PI * 2) / (Math.PI * 2),
-      mirrorNorm: mod(theta, Math.PI * 2) / (Math.PI * 2),
-      ring: Math.hypot(node.q, node.r),
-      q: node.q,
-      r: node.r,
-      theta,
-    };
-  }
-  const coords = getSymmetryCoordinates(theta, symmetry);
-  const radialBucket = Math.round(radial * 120);
-  const angleBucket = Math.round(coords.angleNorm * 120);
-  const angleNorm = clamp01(angleBucket / 120);
-  const mirrorNorm = symmetry.mirror ? clamp01(angleNorm * 2) : angleNorm;
-  const ring = radialBucket;
-  const q = Math.round(angleNorm * 30);
-  const r = radialBucket - q;
-  return {
-    radial: clamp01(radialBucket / 120),
-    angleNorm,
-    mirrorNorm,
-    ring,
-    q,
-    r,
-    theta: angleNorm * ((Math.PI * 2) / symmetry.order),
-  };
-}
-
-function resolveRandomFill(metrics, motifKind, phases, biases, colorPalette, contrast, whiteness) {
-  const { radial, angleNorm, mirrorNorm, ring } = metrics;
-  const value = randomMotifValue(motifKind, metrics, phases);
-  const bias =
-    0.15 * Math.cos(radial * 10 * biases.ring + phases[0]) +
-    0.15 * Math.sin(angleNorm * Math.PI * 4 * biases.angle + phases[1]);
-  const normalized = clamp01(0.5 + 0.5 * Math.tanh((value + bias) * (1.15 + contrast * 0.18)));
-  const colorIndex = Math.min(colorPalette.length - 1, Math.floor(normalized * colorPalette.length));
-  const accentField =
-    Math.abs(
-      Math.sin(ring * 0.95 * biases.accent + mirrorNorm * Math.PI * 5 + phases[2]) +
-        0.35 * Math.cos(radial * 18 + phases[3])
-    ) / 1.35;
-  const makeWhite = radial < 0.08 || (radial < 0.93 && accentField > 0.84 - whiteness * 0.035);
-  return makeWhite ? "#ffffff" : colorPalette[colorIndex].hex;
-}
-
-function applyRandomPatternFromControls() {
-  if (!originalSvgText) {
-    setStatus("SVG not loaded yet.");
-    return;
-  }
-  insertSvg(originalSvgText);
-
-  const seedInput = document.getElementById("randomSeedInput");
-  const motifInput = document.getElementById("randomMotifSelect");
-  const symmetryInput = document.getElementById("randomSymmetrySelect");
-  const randomPaletteInput = document.getElementById("randomPaletteSelect");
-  const contrastInput = document.getElementById("randomContrastInput");
-  const whitenessInput = document.getElementById("randomWhitenessInput");
-  const seedText = seedInput?.value || "mandala-random-001";
-  const motif = motifInput?.value || "auto";
-  const symmetry = getSymmetryConfig(symmetryInput?.value || "c6-mirror-vertex");
-  const paletteMode = randomPaletteInput?.value || paletteSelect?.value || "purple";
-  const contrast = Number(contrastInput?.value || 6);
-  const whiteness = Number(whitenessInput?.value || 4);
-  setPalette(paletteMode);
-  const colorPalette = activePalette.filter((entry) => entry.hex.toLowerCase() !== "#ffffff");
-  const hashed = hashString(`${seedText}|${paletteMode}|${motif}|${symmetry.value}|${contrast}|${whiteness}`)();
-  const rng = mulberry32(hashed);
-  const motifKind = motif === "auto" ? RANDOM_MOTIFS[1 + Math.floor(rng() * (RANDOM_MOTIFS.length - 1))] : motif;
-  const phases = [rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2];
-  const biases = {
-    ring: 0.85 + rng() * 0.45,
-    angle: 0.8 + rng() * 0.9,
-    accent: 0.55 + rng() * 0.6,
-  };
-  const paths = getColorableHexPaths();
-  if (!paths.length) {
-    setStatus("SVG loaded, but no colorable hexagons were found.");
-    return;
-  }
-  const center = { x: viewBox.width / 2, y: viewBox.height / 2 };
-  const maxRadius = Math.min(viewBox.width, viewBox.height) * 0.5 || 1;
-  const nodes = paths.map((path) => {
-    const point = getPathCenterInViewBox(path);
-    return { path, x: point.x, y: point.y, q: 0, r: 0 };
-  });
-
-  inferHexGridCoordinates(nodes);
-
-  const fillByKey = new Map();
-  for (const node of nodes) {
-    const key = getSymmetryKey(node, center, maxRadius, symmetry);
-    if (!fillByKey.has(key)) {
-      const metrics = getMetricsForNode(node, center, maxRadius, symmetry);
-      fillByKey.set(key, resolveRandomFill(metrics, motifKind, phases, biases, colorPalette, contrast, whiteness));
-    }
-    setFillValue(node.path, fillByKey.get(key));
-  }
-
-  setStatus(`Randomized ${nodes.length} hexagons with ${motifKind} motif.`);
-  updateColorCounts();
-}
-
-function nearestPaletteEntry(r, g, b) {
-  if (!activePalette.length) {
-    return { name: "white", hex: "#ffffff", r: 255, g: 255, b: 255 };
-  }
-  let closest = activePalette[0];
-  let closestDist = Number.POSITIVE_INFINITY;
-  for (const color of activePalette) {
-    const dr = r - color.r;
-    const dg = g - color.g;
-    const db = b - color.b;
-    const dist = dr * dr + dg * dg + db * db;
-    if (dist < closestDist) {
-      closestDist = dist;
-      closest = color;
-    }
-  }
-  return closest;
-}
-
-// 1. UPDATED: Handle float coordinates for Hex positioning
-function orderedDitherOffset(x, y) {
-  const size = BAYER_4X4.length;
-  // Map screen coordinates to integer pattern coordinates
-  const mx = Math.floor(x);
-  const my = Math.floor(y);
-  
-  // Safe modulo for potentially negative coordinates
-  const col = ((mx % size) + size) % size;
-  const row = ((my % size) + size) % size;
-  
-  const value = BAYER_4X4[row][col];
-  const normalized = value / (size * size) - 0.5;
-  return normalized * DITHER_STRENGTH;
-}
-
-// 2. REPLACED: Logic now runs on Path list, not Pixel buffer
-// Remove 'buildFloydSteinbergBuffer' entirely. It is not used in this approach.
-
-// 3. UPDATED: Simply samples raw image data (dithering is now handled in applyColors)
-function sampleRawColorAt(x, y) {
-  const ix = Math.max(0, Math.min(Math.round(x), canvas.width - 1));
-  const iy = Math.max(0, Math.min(Math.round(y), canvas.height - 1));
-  const data = ctx.getImageData(ix, iy, 1, 1).data;
-  
-  // Return null if transparent, otherwise object
-  if (data[3] === 0) return null;
-  return { r: data[0], g: data[1], b: data[2] };
-}
-
-
-function sampleColorAt(x, y) {
-  const ix = Math.max(0, Math.min(Math.round(x), canvas.width - 1));
-  const iy = Math.max(0, Math.min(Math.round(y), canvas.height - 1));
-  if (ditherMode === "floyd-steinberg" && ditheredBuffer) {
-    const offset = (iy * ditheredBuffer.width + ix) * 4;
-    const alpha = ditheredBuffer.data[offset + 3];
-    if (alpha === 0) {
-      return "#ffffff";
-    }
-    const entry = nearestPaletteEntry(
-      ditheredBuffer.data[offset],
-      ditheredBuffer.data[offset + 1],
-      ditheredBuffer.data[offset + 2]
-    );
-    return entry.hex;
-  }
-  const data = ctx.getImageData(ix, iy, 1, 1).data;
-  if (data[3] === 0) {
-    return "#ffffff";
-  }
-  let r = data[0];
-  let g = data[1];
-  let b = data[2];
-  if (ditherMode === "ordered") {
-    const offset = orderedDitherOffset(ix, iy);
-    r = clamp(r + offset, 0, 255);
-    g = clamp(g + offset, 0, 255);
-    b = clamp(b + offset, 0, 255);
-  }
-  return nearestPaletteEntry(r, g, b).hex;
-}
-
-function getPathCenterInViewBox(path) {
-  const svgRect = svgRoot.getBoundingClientRect();
-  const pathRect = path.getBoundingClientRect();
-  if (!svgRect.width || !svgRect.height) {
-    return { x: 0, y: 0 };
-  }
-  const centerX = pathRect.left + pathRect.width / 2;
-  const centerY = pathRect.top + pathRect.height / 2;
-  const relX = (centerX - svgRect.left) / svgRect.width;
-  const relY = (centerY - svgRect.top) / svgRect.height;
-  return {
-    x: relX * viewBox.width,
-    y: relY * viewBox.height,
-  };
-}
-
-// 4. REWRITTEN: Hex-Aware Dithering Implementation
-function applyColors() {
-  if (!svgRoot || !imageReady || !canvas.width || !canvas.height) return;
-
-  if (!layoutReady) {
-    setStatus("Preparing layout...");
-    requestAnimationFrame(() => {
-      layoutReady = true;
-      applyColors();
-    });
-    return;
-  }
-
-  drawImageToCanvas();
-
-  const paths = Array.from(svgRoot.querySelectorAll("path"));
-  const nodes = [];
-
-  // Step 1: Extract data and source colors for all relevant paths
-  paths.forEach((path) => {
-    const fill = getFillValue(path);
-    if (!fill || fill.toLowerCase() === "none") return;
-    
-    // Reset to base
-    setFillValue(path, "#ffffff");
-
-    const center = getPathCenterInViewBox(path);
-    const raw = sampleRawColorAt(center.x, center.y);
-
-    if (raw) {
-      nodes.push({
-        path: path,
-        x: center.x,
-        y: center.y,
-        r: raw.r,
-        g: raw.g,
-        b: raw.b,
-        errR: 0, 
-        errG: 0, 
-        errB: 0
-      });
-    }
-  });
-  
-  // Step 2: Sort nodes spatially (Top->Bottom, then Left->Right)
-  // This mimics the scanline required for Error Diffusion
-  nodes.sort((a, b) => (a.y - b.y) || (a.x - b.x));
-
-  // Step 3: Calculate Hex Grid Radius (for finding neighbors)
-  // We approximate the grid size by checking the closest distance in a small sample
-  let gridRadius = 20; // fallback
-  if (nodes.length > 1) {
-    let minD = Infinity;
-    // Check first 50 nodes to estimate neighbor distance
-    for (let i = 0; i < Math.min(nodes.length, 50); i++) {
-        const next = nodes[i+1];
-        if(!next) break;
-        const d = Math.hypot(nodes[i].x - next.x, nodes[i].y - next.y);
-        if (d < minD && d > 1) minD = d;
-    }
-    // Search radius is slightly larger than the distance between hex centers
-    gridRadius = minD * 1.5;
-  }
-
-  let updated = 0;
-
-  // Step 4: Process Dithering
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
-    
-    let r = node.r + node.errR;
-    let g = node.g + node.errG;
-    let b = node.b + node.errB;
-
-    if (ditherMode === "ordered") {
-      // Apply Bayer matrix based on screen coordinates of the Hex center
-      const offset = orderedDitherOffset(node.x, node.y);
-      r += offset;
-      g += offset;
-      b += offset;
-    }
-
-    // Clamp
-    r = clamp(r, 0, 255);
-    g = clamp(g, 0, 255);
-    b = clamp(b, 0, 255);
-
-    // Quantize
-    const entry = nearestPaletteEntry(r, g, b);
-    setFillValue(node.path, entry.hex);
-    updated++;
-
-    // Error Diffusion (Floyd-Steinberg adapted for Hex/Irregular grids)
-    if (ditherMode === "floyd-steinberg") {
-      const eR = r - entry.r;
-      const eG = g - entry.g;
-      const eB = b - entry.b;
-
-      // Find neighbors in the "future" (down/right) within gridRadius
-      // Since array is sorted by Y, we only look forward.
-      for (let j = i + 1; j < nodes.length; j++) {
-        const neighbor = nodes[j];
-        
-        // Optimization: Stop searching if Y difference is too large
-        if (neighbor.y > node.y + gridRadius) break;
-
-        const dx = neighbor.x - node.x;
-        const dy = neighbor.y - node.y;
-        const distSq = dx * dx + dy * dy;
-
-        if (distSq < gridRadius * gridRadius) {
-          // Distribute error based on direction (Simplified Hex weights)
-          let weight = 0;
-
-          // Directly Right
-          if (dx > 0 && Math.abs(dy) < gridRadius / 3) weight = 7 / 16;
-          // Bottom Left
-          else if (dx < 0 && dy > 0) weight = 3 / 16;
-          // Bottom / Bottom Right
-          else if (dy > 0) weight = 5 / 16; // Combined remaining weight
-          
-          if (weight > 0) {
-            neighbor.errR += eR * weight;
-            neighbor.errG += eG * weight;
-            neighbor.errB += eB * weight;
-          }
-        }
-      }
-    }
-  }
-
-  setStatus(`Updated ${updated} hexagons.`);
-  updateColorCounts();
 }
 
 function scheduleApplyColors(delayMs = 150) {
@@ -741,7 +134,15 @@ function scheduleApplyColors(delayMs = 150) {
   }
   applyTimeout = window.setTimeout(() => {
     applyTimeout = null;
-    applyColors();
+    if (layoutReady) {
+      handleApplyColors();
+    } else {
+      setStatus(statusEl, "Preparing layout...");
+      requestAnimationFrame(() => {
+        layoutReady = true;
+        handleApplyColors();
+      });
+    }
   }, delayMs);
 }
 
@@ -760,36 +161,14 @@ function loadImage(file) {
     translateYInput.value = "0";
     imageReady = true;
     updateTransformValues();
-    setStatus("Image loaded. Applying colors...");
+    setStatus(statusEl, "Image loaded. Applying colors...");
     scheduleApplyColors(0);
   };
   img.onerror = () => {
     imageReady = false;
-    setStatus("Could not load that image.");
+    setStatus(statusEl, "Could not load that image.");
   };
   img.src = currentImageUrl;
-}
-
-function drawImageToCanvas() {
-  if (!sourceImage || !canvas.width || !canvas.height) {
-    return;
-  }
-  const baseScale = Math.max(
-    viewBox.width / sourceImage.width,
-    viewBox.height / sourceImage.height
-  );
-  const baseWidth = sourceImage.width * baseScale;
-  const baseHeight = sourceImage.height * baseScale;
-  const centerX = viewBox.width / 2 + imageTransform.translateX;
-  const centerY = viewBox.height / 2 + imageTransform.translateY;
-  ctx.imageSmoothingEnabled = false;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.save();
-  ctx.translate(centerX, centerY);
-  ctx.scale(baseScale * imageTransform.scale, baseScale * imageTransform.scale);
-  ctx.drawImage(sourceImage, -sourceImage.width / 2, -sourceImage.height / 2);
-  ctx.restore();
 }
 
 function updateTransformValues() {
@@ -800,14 +179,14 @@ function updateTransformValues() {
   translateXValue.textContent = `${Math.round(imageTransform.translateX)}`;
   translateYValue.textContent = `${Math.round(imageTransform.translateY)}`;
   if (imageReady) {
-    drawImageToCanvas();
+    drawImageToCanvas(sourceImage, canvas, ctx, viewBox, imageTransform);
     scheduleApplyColors();
   }
 }
 
 function downloadSvg() {
   if (!svgRoot) {
-    setStatus("SVG not loaded yet.");
+    setStatus(statusEl, "SVG not loaded yet.");
     return;
   }
   const serializer = new XMLSerializer();
@@ -821,48 +200,83 @@ function downloadSvg() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  setStatus("SVG downloaded.");
+  setStatus(statusEl, "SVG downloaded.");
 }
 
 function resetSvg() {
   if (!originalSvgText) {
-    setStatus("SVG not loaded yet.");
+    setStatus(statusEl, "SVG not loaded yet.");
     return;
   }
   insertSvg(originalSvgText);
   if (imageReady) {
     canvas.width = viewBox.width;
     canvas.height = viewBox.height;
-    drawImageToCanvas();
+    drawImageToCanvas(sourceImage, canvas, ctx, viewBox, imageTransform);
   }
-  setStatus("SVG reset to original colors.");
-  updateColorCounts();
+  setStatus(statusEl, "SVG reset to original colors.");
+  updateColorCounts(svgRoot, colorCountsEl, paletteSelect?.value);
 }
 
-function useOriginalSvgForRandomPattern() {
+function applyRandomPatternFromControls() {
   if (!originalSvgText) {
-    setStatus("SVG not loaded yet.");
-    return false;
+    setStatus(statusEl, "SVG not loaded yet.");
+    return;
   }
   insertSvg(originalSvgText);
-  layoutReady = false;
-  requestAnimationFrame(() => {
-    layoutReady = true;
-  });
-  if (imageReady) {
-    canvas.width = viewBox.width;
-    canvas.height = viewBox.height;
-    drawImageToCanvas();
-  }
-  return true;
-}
 
-function randomizeSeedAndApply() {
   const seedInput = document.getElementById("randomSeedInput");
-  if (seedInput) {
-    seedInput.value = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const motifInput = document.getElementById("randomMotifSelect");
+  const symmetryInput = document.getElementById("randomSymmetrySelect");
+  const randomPaletteInput = document.getElementById("randomPaletteSelect");
+  const contrastInput = document.getElementById("randomContrastInput");
+  const whitenessInput = document.getElementById("randomWhitenessInput");
+  
+  const seedText = seedInput?.value || "mandala-random-001";
+  const motif = motifInput?.value || "auto";
+  const symmetry = getSymmetryConfig(symmetryInput?.value || "c6-mirror-vertex");
+  const paletteMode = randomPaletteInput?.value || paletteSelect?.value || "purple";
+  const contrast = Number(contrastInput?.value || 6);
+  const whiteness = Number(whitenessInput?.value || 4);
+  
+  activePalette = buildFixedPalette(paletteMode);
+  const colorPalette = activePalette.filter((entry) => entry.hex.toLowerCase() !== "#ffffff");
+  const hashed = hashString(`${seedText}|${paletteMode}|${motif}|${symmetry.value}|${contrast}|${whiteness}`)();
+  const rng = mulberry32(hashed);
+  const motifKind = motif === "auto" ? RANDOM_MOTIFS[1 + Math.floor(rng() * (RANDOM_MOTIFS.length - 1))] : motif;
+  const phases = [rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2];
+  const biases = {
+    ring: 0.85 + rng() * 0.45,
+    angle: 0.8 + rng() * 0.9,
+    accent: 0.55 + rng() * 0.6,
+  };
+  
+  const paths = getColorableHexPaths(svgRoot);
+  if (!paths.length) {
+    setStatus(statusEl, "SVG loaded, but no colorable hexagons were found.");
+    return;
   }
-  applyRandomPatternFromControls();
+  const center = { x: viewBox.width / 2, y: viewBox.height / 2 };
+  const maxRadius = Math.min(viewBox.width, viewBox.height) * 0.5 || 1;
+  const nodes = paths.map((path) => {
+    const point = getPathCenterInViewBox(path, svgRoot, viewBox);
+    return { path, x: point.x, y: point.y, q: 0, r: 0 };
+  });
+
+  inferHexGridCoordinates(nodes, viewBox);
+
+  const fillByKey = new Map();
+  for (const node of nodes) {
+    const key = getSymmetryKey(node, center, maxRadius, symmetry);
+    if (!fillByKey.has(key)) {
+      const metrics = getMetricsForNode(node, center, maxRadius, symmetry);
+      fillByKey.set(key, resolveRandomFill(metrics, motifKind, phases, biases, colorPalette, contrast, whiteness));
+    }
+    setFillValue(node.path, fillByKey.get(key));
+  }
+
+  setStatus(statusEl, `Randomized ${nodes.length} hexagons with ${motifKind} motif.`);
+  updateColorCounts(svgRoot, colorCountsEl, paletteSelect?.value);
 }
 
 function createTabbedControls() {
@@ -986,7 +400,18 @@ function createTabbedControls() {
     document.getElementById("randomTabBtn").style.color = imageActive ? "var(--ink)" : "#fff";
     overlayCanvas.style.display = imageActive ? "" : "none";
     if (!imageActive) {
-      useOriginalSvgForRandomPattern();
+      if (originalSvgText) {
+        insertSvg(originalSvgText);
+        layoutReady = false;
+        requestAnimationFrame(() => {
+          layoutReady = true;
+        });
+        if (imageReady) {
+          canvas.width = viewBox.width;
+          canvas.height = viewBox.height;
+          drawImageToCanvas(sourceImage, canvas, ctx, viewBox, imageTransform);
+        }
+      }
     }
   };
 
@@ -1012,23 +437,30 @@ function createTabbedControls() {
     randomPaletteSelect.value = paletteSelect.value;
     randomPaletteSelect.addEventListener("change", (event) => {
       paletteSelect.value = event.target.value;
-      setPalette(event.target.value);
+      activePalette = buildFixedPalette(event.target.value);
     });
   }
   document.getElementById("imageTabBtn")?.addEventListener("click", () => setActiveTab("image"));
   document.getElementById("randomTabBtn")?.addEventListener("click", () => setActiveTab("random"));
   document.getElementById("generatePatternBtn")?.addEventListener("click", applyRandomPatternFromControls);
-  document.getElementById("randomPatternBtn")?.addEventListener("click", randomizeSeedAndApply);
+  document.getElementById("randomPatternBtn")?.addEventListener("click", () => {
+    const seedInput = document.getElementById("randomSeedInput");
+    if (seedInput) {
+      seedInput.value = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    }
+    applyRandomPatternFromControls();
+  });
   document.getElementById("resetRandomBtn")?.addEventListener("click", resetSvg);
   document.getElementById("downloadRandomBtn")?.addEventListener("click", downloadSvg);
 }
 
+// Event Listeners
 opacityInput.addEventListener("input", (event) => {
   overlayCanvas.style.opacity = event.target.value;
 });
 
 paletteSelect.addEventListener("change", (event) => {
-  setPalette(event.target.value);
+  activePalette = buildFixedPalette(event.target.value);
   const randomPaletteSelect = document.getElementById("randomPaletteSelect");
   if (randomPaletteSelect) {
     randomPaletteSelect.value = event.target.value;
@@ -1156,10 +588,11 @@ canvasWrap.addEventListener("drop", (event) => {
   loadImage(file);
 });
 
-applyBtn.addEventListener("click", applyColors);
+applyBtn.addEventListener("click", handleApplyColors);
 resetBtn.addEventListener("click", resetSvg);
 downloadBtn.addEventListener("click", downloadSvg);
 
+// Init
 async function init() {
   try {
     createTabbedControls();
@@ -1169,22 +602,25 @@ async function init() {
     }
     originalSvgText = await response.text();
     insertSvg(originalSvgText);
-    setPalette(paletteSelect?.value);
+    activePalette = buildFixedPalette(paletteSelect?.value);
     ditherMode = ditherSelect?.value || "none";
+    
     const translateRangeX = Math.round(viewBox.width * 0.35);
     const translateRangeY = Math.round(viewBox.height * 0.35);
     translateXInput.min = -translateRangeX;
     translateXInput.max = translateRangeX;
     translateYInput.min = -translateRangeY;
     translateYInput.max = translateRangeY;
+    
     updateTransformValues();
     requestAnimationFrame(() => {
       layoutReady = true;
     });
-    setStatus("SVG loaded. Upload an image to begin.");
-    updateColorCounts();
+    setStatus(statusEl, "SVG loaded. Upload an image to begin.");
+    updateColorCounts(svgRoot, colorCountsEl, paletteSelect?.value);
   } catch (error) {
-    setStatus("Could not load the SVG file.");
+    console.error(error);
+    setStatus(statusEl, "Could not load the SVG file.");
   }
 }
 
