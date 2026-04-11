@@ -21,6 +21,18 @@ const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const svgPath = "data/onepage_model.svg";
 
 const RANDOM_MOTIFS = ["auto", "flower", "star", "ribbons", "diamonds", "petals", "mosaic"];
+const RANDOM_SYMMETRIES = [
+  { value: "c6-mirror-vertex", label: "C6 mirrored through vertices", order: 6, offset: 0, mirror: true },
+  { value: "c6-mirror-side", label: "C6 mirrored through sides", order: 6, offset: Math.PI / 6, mirror: true },
+  { value: "c6", label: "C6 rotational", order: 6, offset: 0, mirror: false },
+  { value: "c3-vertex", label: "C3 through vertices", order: 3, offset: 0, mirror: true },
+  { value: "c3-side", label: "C3 through sides", order: 3, offset: Math.PI / 3, mirror: true },
+  { value: "c3", label: "C3 rotational", order: 3, offset: 0, mirror: false },
+  { value: "c2-vertex", label: "C2 through vertices", order: 2, offset: 0, mirror: true },
+  { value: "c2-side", label: "C2 through sides", order: 2, offset: Math.PI / 6, mirror: true },
+  { value: "c2", label: "C2 rotational", order: 2, offset: 0, mirror: false },
+  { value: "none", label: "No enforced symmetry", order: 1, offset: 0, mirror: false },
+];
 const BAYER_4X4 = [
   [0, 8, 2, 10],
   [12, 4, 14, 6],
@@ -212,33 +224,33 @@ function clamp01(v) {
 }
 
 function randomMotifValue(kind, metrics, phases) {
-  const { radial, localAngleNorm, ring, q, r, theta } = metrics;
+  const { radial, angleNorm, mirrorNorm, ring, q, r, theta } = metrics;
   const [p1, p2, p3, p4] = phases;
 
   const flower =
-    0.55 * Math.cos(localAngleNorm * Math.PI * 3 + p1) +
+    0.62 * Math.cos(mirrorNorm * Math.PI * 3 + p1) +
     0.45 * Math.sin(radial * 11 + p2) +
     0.25 * Math.cos(ring * 0.82 + p3);
 
   const star =
-    0.6 * Math.cos(theta * 6 + p1) * (1 - radial * 0.6) +
+    0.72 * Math.cos(angleNorm * Math.PI * 2 + p1) * (1 - radial * 0.6) +
     0.35 * Math.sin(radial * 14 + p2) +
     0.2 * Math.cos(ring * 0.75 + p3);
 
   const ribbons =
     0.45 * Math.sin((q - r) * 0.82 + p1) +
     0.4 * Math.cos((q + 2 * r) * 0.55 + p2) +
-    0.25 * Math.cos(localAngleNorm * Math.PI * 4 + p3);
+    0.3 * Math.sin(angleNorm * Math.PI * 5 + radial * 8 + p3);
 
   const diamonds =
     0.45 * Math.cos((q + r) * 0.82 + p1) +
     0.45 * Math.cos((q - r) * 0.82 + p2) +
-    0.2 * Math.sin(radial * 10 + p3);
+    0.32 * Math.cos(mirrorNorm * Math.PI * 6 + radial * 7 + p3);
 
   const petals =
-    0.55 * Math.cos(localAngleNorm * Math.PI * 5 + p1) * (1 - radial * 0.35) +
+    0.62 * Math.cos(mirrorNorm * Math.PI * 5 + p1) * (1 - radial * 0.35) +
     0.4 * Math.cos(radial * 9 + p2) +
-    0.18 * Math.cos(theta * 12 + p3);
+    0.25 * Math.cos(angleNorm * Math.PI * 4 + p3);
 
   const mosaic =
     0.35 * Math.sin(q * 0.92 + p1) +
@@ -291,6 +303,55 @@ function getColorableHexPaths() {
   });
 }
 
+function getSymmetryConfig(value) {
+  return RANDOM_SYMMETRIES.find((entry) => entry.value === value) || RANDOM_SYMMETRIES[0];
+}
+
+function getSymmetryCoordinates(theta, symmetry) {
+  const period = (Math.PI * 2) / symmetry.order;
+  const local = mod(theta - symmetry.offset, period);
+  const canonical = symmetry.mirror ? Math.min(local, period - local) : local;
+  return {
+    angleNorm: period ? canonical / period : 0,
+    mirrorNorm: symmetry.mirror && period ? canonical / (period / 2) : canonical / period,
+  };
+}
+
+function getSymmetryKey(node, center, maxRadius, symmetry) {
+  const dx = node.x - center.x;
+  const dy = node.y - center.y;
+  const theta = Math.atan2(dy, dx);
+  const radialBucket = Math.round((Math.hypot(dx, dy) / maxRadius) * 120);
+  const coords = getSymmetryCoordinates(theta, symmetry);
+  const angleBucket = Math.round(coords.angleNorm * 120);
+  return `${radialBucket}:${angleBucket}`;
+}
+
+function resolveRandomFillForKey(key, motifKind, phases, biases, colorPalette, contrast, whiteness, symmetry) {
+  const [radialBucket, angleBucket] = key.split(":").map(Number);
+  const radial = clamp01(radialBucket / 120);
+  const angleNorm = clamp01(angleBucket / 120);
+  const mirrorNorm = symmetry.mirror ? clamp01(angleNorm * 2) : angleNorm;
+  const ring = radialBucket;
+  const q = Math.round(angleNorm * 30);
+  const r = radialBucket - q;
+  const theta = angleNorm * ((Math.PI * 2) / symmetry.order);
+  const metrics = { radial, angleNorm, mirrorNorm, ring, q, r, theta };
+  const value = randomMotifValue(motifKind, metrics, phases);
+  const bias =
+    0.15 * Math.cos(radial * 10 * biases.ring + phases[0]) +
+    0.15 * Math.sin(angleNorm * Math.PI * 4 * biases.angle + phases[1]);
+  const normalized = clamp01(0.5 + 0.5 * Math.tanh((value + bias) * (1.15 + contrast * 0.18)));
+  const colorIndex = Math.min(colorPalette.length - 1, Math.floor(normalized * colorPalette.length));
+  const accentField =
+    Math.abs(
+      Math.sin(ring * 0.95 * biases.accent + mirrorNorm * Math.PI * 5 + phases[2]) +
+        0.35 * Math.cos(radial * 18 + phases[3])
+    ) / 1.35;
+  const makeWhite = radial < 0.08 || (radial < 0.93 && accentField > 0.84 - whiteness * 0.035);
+  return makeWhite ? "#ffffff" : colorPalette[colorIndex].hex;
+}
+
 function applyRandomPatternFromControls() {
   if (!originalSvgText) {
     setStatus("SVG not loaded yet.");
@@ -300,21 +361,25 @@ function applyRandomPatternFromControls() {
 
   const seedInput = document.getElementById("randomSeedInput");
   const motifInput = document.getElementById("randomMotifSelect");
+  const symmetryInput = document.getElementById("randomSymmetrySelect");
   const contrastInput = document.getElementById("randomContrastInput");
   const whitenessInput = document.getElementById("randomWhitenessInput");
   const seedText = seedInput?.value || "mandala-random-001";
   const motif = motifInput?.value || "auto";
+  const symmetry = getSymmetryConfig(symmetryInput?.value || "c6-mirror-vertex");
   const contrast = Number(contrastInput?.value || 6);
   const whiteness = Number(whitenessInput?.value || 4);
   setPalette(paletteSelect?.value || "purple");
   const colorPalette = activePalette.filter((entry) => entry.hex.toLowerCase() !== "#ffffff");
-  const hashed = hashString(`${seedText}|${paletteSelect?.value || "purple"}|${motif}|${contrast}|${whiteness}`)();
+  const hashed = hashString(`${seedText}|${paletteSelect?.value || "purple"}|${motif}|${symmetry.value}|${contrast}|${whiteness}`)();
   const rng = mulberry32(hashed);
   const motifKind = motif === "auto" ? RANDOM_MOTIFS[1 + Math.floor(rng() * (RANDOM_MOTIFS.length - 1))] : motif;
   const phases = [rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2];
-  const ringBias = 0.85 + rng() * 0.45;
-  const angleBias = 0.8 + rng() * 0.9;
-  const accentBias = 0.55 + rng() * 0.6;
+  const biases = {
+    ring: 0.85 + rng() * 0.45,
+    angle: 0.8 + rng() * 0.9,
+    accent: 0.55 + rng() * 0.6,
+  };
   const paths = getColorableHexPaths();
   if (!paths.length) {
     setStatus("SVG loaded, but no colorable hexagons were found.");
@@ -329,30 +394,13 @@ function applyRandomPatternFromControls() {
 
   inferHexGridCoordinates(nodes);
 
+  const fillByKey = new Map();
   for (const node of nodes) {
-    const dx = node.x - center.x;
-    const dy = node.y - center.y;
-    const theta = Math.atan2(dy, dx);
-    const radial = clamp01(Math.hypot(dx, dy) / maxRadius);
-    const wedge = mod(theta, Math.PI / 3);
-    const folded = Math.min(wedge, Math.PI / 3 - wedge);
-    const localAngleNorm = folded / (Math.PI / 6);
-    const ring = Math.hypot(node.q, node.r);
-    const metrics = { radial, localAngleNorm, ring, q: node.q, r: node.r, theta };
-    const value = randomMotifValue(motifKind, metrics, phases);
-    const bias =
-      0.15 * Math.cos(radial * 10 * ringBias + phases[0]) +
-      0.15 * Math.sin(localAngleNorm * Math.PI * 4 * angleBias + phases[1]) +
-      0.06 * Math.cos(theta * 6 + phases[2]);
-    const normalized = clamp01(0.5 + 0.5 * Math.tanh((value + bias) * (1.15 + contrast * 0.18)));
-    const colorIndex = Math.min(colorPalette.length - 1, Math.floor(normalized * colorPalette.length));
-    const accentField =
-      Math.abs(
-        Math.sin(ring * 0.95 * accentBias + localAngleNorm * Math.PI * 5 + phases[2]) +
-          0.35 * Math.cos(radial * 18 + phases[3])
-      ) / 1.35;
-    const makeWhite = radial < 0.08 || (radial < 0.93 && accentField > 0.84 - whiteness * 0.035);
-    setFillValue(node.path, makeWhite ? "#ffffff" : colorPalette[colorIndex].hex);
+    const key = getSymmetryKey(node, center, maxRadius, symmetry);
+    if (!fillByKey.has(key)) {
+      fillByKey.set(key, resolveRandomFillForKey(key, motifKind, phases, biases, colorPalette, contrast, whiteness, symmetry));
+    }
+    setFillValue(node.path, fillByKey.get(key));
   }
 
   setStatus(`Randomized ${nodes.length} hexagons with ${motifKind} motif.`);
@@ -762,6 +810,12 @@ function createTabbedControls() {
       <span>Motif family</span>
       <select id="randomMotifSelect">
         ${RANDOM_MOTIFS.map((motif) => `<option value="${motif}">${motif}</option>`).join("")}
+      </select>
+    </label>
+    <label>
+      <span>Symmetry</span>
+      <select id="randomSymmetrySelect">
+        ${RANDOM_SYMMETRIES.map((symmetry) => `<option value="${symmetry.value}">${symmetry.label}</option>`).join("")}
       </select>
     </label>
     <label>
