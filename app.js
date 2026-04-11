@@ -56,6 +56,7 @@ const translateXValue = document.getElementById("translateXValue");
 const translateYValue = document.getElementById("translateYValue");
 const applyBtn = document.getElementById("applyBtn");
 const downloadBtn = document.getElementById("downloadBtn");
+const printBtn = document.getElementById("printBtn");
 const resetBtn = document.getElementById("resetBtn");
 const statusEl = document.getElementById("status");
 const canvas = overlayCanvas;
@@ -352,6 +353,7 @@ function createTabbedControls() {
       <button id="randomPatternBtn" type="button">Randomize</button>
       <button id="resetRandomBtn" type="button">Reset SVG</button>
       <button id="downloadRandomBtn" type="button">Download SVG</button>
+      <button id="printRandomBtn" type="button">Print/Download</button>
     </div>
     </fieldset>
   `;
@@ -452,9 +454,11 @@ function createTabbedControls() {
   });
   document.getElementById("resetRandomBtn")?.addEventListener("click", resetSvg);
   document.getElementById("downloadRandomBtn")?.addEventListener("click", downloadSvg);
+  document.getElementById("printRandomBtn")?.addEventListener("click", () => window.print());
 }
 
 // Event Listeners
+printBtn.addEventListener("click", () => window.print());
 opacityInput.addEventListener("input", (event) => {
   overlayCanvas.style.opacity = event.target.value;
 });
