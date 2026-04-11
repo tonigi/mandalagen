@@ -17,10 +17,28 @@ const resetBtn = document.getElementById("resetBtn");
 const statusEl = document.getElementById("status");
 const canvas = overlayCanvas;
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
+const colorCountsEl = document.createElement("div");
+colorCountsEl.id = "colorCounts";
+colorCountsEl.className = "status";
+colorCountsEl.style.display = "flex";
+colorCountsEl.style.flexWrap = "wrap";
+colorCountsEl.style.justifyContent = "center";
+colorCountsEl.style.gap = "8px";
+colorCountsEl.style.marginTop = "8px";
+statusEl.insertAdjacentElement("afterend", colorCountsEl);
 
 const svgPath = "data/onepage_model.svg";
 
 const RANDOM_MOTIFS = ["auto", "flower", "star", "ribbons", "diamonds", "petals", "mosaic"];
+const RANDOM_MOTIF_DESCRIPTIONS = {
+  auto: "Picks one motif family from the seed.",
+  flower: "Radial lobes with soft ring variation.",
+  star: "Spoke-like rays from the center.",
+  ribbons: "Diagonal bands crossing the grid.",
+  diamonds: "Lattice-like diamond structure.",
+  petals: "Tighter petal lobes with ring accents.",
+  mosaic: "Patchy, noisy cell clusters.",
+};
 const RANDOM_SYMMETRIES = [
   { value: "c6-mirror-vertex", label: "C6 mirrored through vertices", order: 6, offset: 0, mirror: true },
   { value: "c6-mirror-side", label: "C6 mirrored through sides", order: 6, offset: Math.PI / 6, mirror: true },
@@ -79,6 +97,50 @@ const imageTransform = {
 
 function setStatus(message) {
   statusEl.textContent = message;
+}
+
+function getColorName(hex) {
+  const normalized = normalizeHex(hex);
+  for (const palette of Object.values(palettes)) {
+    const match = palette.find((entry) => normalizeHex(entry.hex) === normalized);
+    if (match) return match.name;
+  }
+  return normalized;
+}
+
+function updateColorCounts() {
+  if (!svgRoot) {
+    colorCountsEl.textContent = "";
+    return;
+  }
+
+  const counts = new Map();
+  for (const path of getColorableHexPaths()) {
+    const fill = normalizeHex(getFillValue(path));
+    if (!fill) continue;
+    counts.set(fill, (counts.get(fill) || 0) + 1);
+  }
+
+  if (!counts.size) {
+    colorCountsEl.textContent = "";
+    return;
+  }
+
+  const paletteOrder = buildFixedPalette(paletteSelect?.value || "purple").map((entry) => entry.hex);
+  const orderedColors = [
+    ...paletteOrder.filter((hex) => counts.has(hex)),
+    ...Array.from(counts.keys())
+      .filter((hex) => !paletteOrder.includes(hex))
+      .sort(),
+  ];
+
+  colorCountsEl.innerHTML = orderedColors
+    .map((hex) => {
+      const count = counts.get(hex);
+      const label = getColorName(hex);
+      return `<span style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--panel-edge);border-radius:999px;background:#fff;padding:4px 8px;font-size:12px;"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,0.25);background:${hex};"></span>${label}: ${count}</span>`;
+    })
+    .join("");
 }
 
 function parseViewBox(svg) {
@@ -318,6 +380,9 @@ function getSymmetryCoordinates(theta, symmetry) {
 }
 
 function getSymmetryKey(node, center, maxRadius, symmetry) {
+  if (symmetry.value === "none") {
+    return `${node.q}:${node.r}`;
+  }
   const dx = node.x - center.x;
   const dy = node.y - center.y;
   const theta = Math.atan2(dy, dx);
@@ -327,16 +392,43 @@ function getSymmetryKey(node, center, maxRadius, symmetry) {
   return `${radialBucket}:${angleBucket}`;
 }
 
-function resolveRandomFillForKey(key, motifKind, phases, biases, colorPalette, contrast, whiteness, symmetry) {
-  const [radialBucket, angleBucket] = key.split(":").map(Number);
-  const radial = clamp01(radialBucket / 120);
+function getMetricsForNode(node, center, maxRadius, symmetry) {
+  const dx = node.x - center.x;
+  const dy = node.y - center.y;
+  const theta = Math.atan2(dy, dx);
+  const radial = clamp01(Math.hypot(dx, dy) / maxRadius);
+  if (symmetry.value === "none") {
+    return {
+      radial,
+      angleNorm: mod(theta, Math.PI * 2) / (Math.PI * 2),
+      mirrorNorm: mod(theta, Math.PI * 2) / (Math.PI * 2),
+      ring: Math.hypot(node.q, node.r),
+      q: node.q,
+      r: node.r,
+      theta,
+    };
+  }
+  const coords = getSymmetryCoordinates(theta, symmetry);
+  const radialBucket = Math.round(radial * 120);
+  const angleBucket = Math.round(coords.angleNorm * 120);
   const angleNorm = clamp01(angleBucket / 120);
   const mirrorNorm = symmetry.mirror ? clamp01(angleNorm * 2) : angleNorm;
   const ring = radialBucket;
   const q = Math.round(angleNorm * 30);
   const r = radialBucket - q;
-  const theta = angleNorm * ((Math.PI * 2) / symmetry.order);
-  const metrics = { radial, angleNorm, mirrorNorm, ring, q, r, theta };
+  return {
+    radial: clamp01(radialBucket / 120),
+    angleNorm,
+    mirrorNorm,
+    ring,
+    q,
+    r,
+    theta: angleNorm * ((Math.PI * 2) / symmetry.order),
+  };
+}
+
+function resolveRandomFill(metrics, motifKind, phases, biases, colorPalette, contrast, whiteness) {
+  const { radial, angleNorm, mirrorNorm, ring } = metrics;
   const value = randomMotifValue(motifKind, metrics, phases);
   const bias =
     0.15 * Math.cos(radial * 10 * biases.ring + phases[0]) +
@@ -362,16 +454,18 @@ function applyRandomPatternFromControls() {
   const seedInput = document.getElementById("randomSeedInput");
   const motifInput = document.getElementById("randomMotifSelect");
   const symmetryInput = document.getElementById("randomSymmetrySelect");
+  const randomPaletteInput = document.getElementById("randomPaletteSelect");
   const contrastInput = document.getElementById("randomContrastInput");
   const whitenessInput = document.getElementById("randomWhitenessInput");
   const seedText = seedInput?.value || "mandala-random-001";
   const motif = motifInput?.value || "auto";
   const symmetry = getSymmetryConfig(symmetryInput?.value || "c6-mirror-vertex");
+  const paletteMode = randomPaletteInput?.value || paletteSelect?.value || "purple";
   const contrast = Number(contrastInput?.value || 6);
   const whiteness = Number(whitenessInput?.value || 4);
-  setPalette(paletteSelect?.value || "purple");
+  setPalette(paletteMode);
   const colorPalette = activePalette.filter((entry) => entry.hex.toLowerCase() !== "#ffffff");
-  const hashed = hashString(`${seedText}|${paletteSelect?.value || "purple"}|${motif}|${symmetry.value}|${contrast}|${whiteness}`)();
+  const hashed = hashString(`${seedText}|${paletteMode}|${motif}|${symmetry.value}|${contrast}|${whiteness}`)();
   const rng = mulberry32(hashed);
   const motifKind = motif === "auto" ? RANDOM_MOTIFS[1 + Math.floor(rng() * (RANDOM_MOTIFS.length - 1))] : motif;
   const phases = [rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2];
@@ -398,12 +492,14 @@ function applyRandomPatternFromControls() {
   for (const node of nodes) {
     const key = getSymmetryKey(node, center, maxRadius, symmetry);
     if (!fillByKey.has(key)) {
-      fillByKey.set(key, resolveRandomFillForKey(key, motifKind, phases, biases, colorPalette, contrast, whiteness, symmetry));
+      const metrics = getMetricsForNode(node, center, maxRadius, symmetry);
+      fillByKey.set(key, resolveRandomFill(metrics, motifKind, phases, biases, colorPalette, contrast, whiteness));
     }
     setFillValue(node.path, fillByKey.get(key));
   }
 
   setStatus(`Randomized ${nodes.length} hexagons with ${motifKind} motif.`);
+  updateColorCounts();
 }
 
 function nearestPaletteEntry(r, g, b) {
@@ -636,6 +732,7 @@ function applyColors() {
   }
 
   setStatus(`Updated ${updated} hexagons.`);
+  updateColorCounts();
 }
 
 function scheduleApplyColors(delayMs = 150) {
@@ -739,6 +836,7 @@ function resetSvg() {
     drawImageToCanvas();
   }
   setStatus("SVG reset to original colors.");
+  updateColorCounts();
 }
 
 function useOriginalSvgForRandomPattern() {
@@ -811,6 +909,7 @@ function createTabbedControls() {
       <select id="randomMotifSelect">
         ${RANDOM_MOTIFS.map((motif) => `<option value="${motif}">${motif}</option>`).join("")}
       </select>
+      <p class="status" id="randomMotifDescription"></p>
     </label>
     <label>
       <span>Symmetry</span>
@@ -820,7 +919,11 @@ function createTabbedControls() {
     </label>
     <label>
       <span>Palette</span>
-      <p class="status">Uses the palette selected in the Image tab.</p>
+      <select id="randomPaletteSelect">
+        ${Array.from(paletteSelect.options)
+          .map((option) => `<option value="${option.value}">${option.textContent}</option>`)
+          .join("")}
+      </select>
     </label>
     <label>
       <span>Contrast <strong class="value" id="randomContrastValue">6</strong></span>
@@ -897,6 +1000,21 @@ function createTabbedControls() {
 
   bindValue("randomContrastInput", "randomContrastValue");
   bindValue("randomWhitenessInput", "randomWhitenessValue");
+  const motifSelect = document.getElementById("randomMotifSelect");
+  const motifDescription = document.getElementById("randomMotifDescription");
+  const updateMotifDescription = () => {
+    motifDescription.textContent = RANDOM_MOTIF_DESCRIPTIONS[motifSelect.value] || "";
+  };
+  motifSelect?.addEventListener("change", updateMotifDescription);
+  updateMotifDescription();
+  const randomPaletteSelect = document.getElementById("randomPaletteSelect");
+  if (randomPaletteSelect) {
+    randomPaletteSelect.value = paletteSelect.value;
+    randomPaletteSelect.addEventListener("change", (event) => {
+      paletteSelect.value = event.target.value;
+      setPalette(event.target.value);
+    });
+  }
   document.getElementById("imageTabBtn")?.addEventListener("click", () => setActiveTab("image"));
   document.getElementById("randomTabBtn")?.addEventListener("click", () => setActiveTab("random"));
   document.getElementById("generatePatternBtn")?.addEventListener("click", applyRandomPatternFromControls);
@@ -911,6 +1029,10 @@ opacityInput.addEventListener("input", (event) => {
 
 paletteSelect.addEventListener("change", (event) => {
   setPalette(event.target.value);
+  const randomPaletteSelect = document.getElementById("randomPaletteSelect");
+  if (randomPaletteSelect) {
+    randomPaletteSelect.value = event.target.value;
+  }
   if (imageReady) {
     scheduleApplyColors();
   }
@@ -1060,6 +1182,7 @@ async function init() {
       layoutReady = true;
     });
     setStatus("SVG loaded. Upload an image to begin.");
+    updateColorCounts();
   } catch (error) {
     setStatus("Could not load the SVG file.");
   }
