@@ -19,6 +19,8 @@ const canvas = overlayCanvas;
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
 const svgPath = "data/onepage_model.svg";
+
+const RANDOM_MOTIFS = ["auto", "flower", "star", "ribbons", "diamonds", "petals", "mosaic"];
 const BAYER_4X4 = [
   [0, 8, 2, 10],
   [12, 4, 14, 6],
@@ -177,6 +179,183 @@ function setPalette(mode) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function hashString(input) {
+  let h = 1779033703 ^ input.length;
+  for (let i = 0; i < input.length; i += 1) {
+    h = Math.imul(h ^ input.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return () => {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return (h ^= h >>> 16) >>> 0;
+  };
+}
+
+function mulberry32(seed) {
+  return function random() {
+    let t = (seed += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function mod(n, m) {
+  return ((n % m) + m) % m;
+}
+
+function clamp01(v) {
+  return clamp(v, 0, 1);
+}
+
+function randomMotifValue(kind, metrics, phases) {
+  const { radial, localAngleNorm, ring, q, r, theta } = metrics;
+  const [p1, p2, p3, p4] = phases;
+
+  const flower =
+    0.55 * Math.cos(localAngleNorm * Math.PI * 3 + p1) +
+    0.45 * Math.sin(radial * 11 + p2) +
+    0.25 * Math.cos(ring * 0.82 + p3);
+
+  const star =
+    0.6 * Math.cos(theta * 6 + p1) * (1 - radial * 0.6) +
+    0.35 * Math.sin(radial * 14 + p2) +
+    0.2 * Math.cos(ring * 0.75 + p3);
+
+  const ribbons =
+    0.45 * Math.sin((q - r) * 0.82 + p1) +
+    0.4 * Math.cos((q + 2 * r) * 0.55 + p2) +
+    0.25 * Math.cos(localAngleNorm * Math.PI * 4 + p3);
+
+  const diamonds =
+    0.45 * Math.cos((q + r) * 0.82 + p1) +
+    0.45 * Math.cos((q - r) * 0.82 + p2) +
+    0.2 * Math.sin(radial * 10 + p3);
+
+  const petals =
+    0.55 * Math.cos(localAngleNorm * Math.PI * 5 + p1) * (1 - radial * 0.35) +
+    0.4 * Math.cos(radial * 9 + p2) +
+    0.18 * Math.cos(theta * 12 + p3);
+
+  const mosaic =
+    0.35 * Math.sin(q * 0.92 + p1) +
+    0.35 * Math.cos(r * 0.9 + p2) +
+    0.2 * Math.sin((q + r) * 0.63 + p3) +
+    0.18 * Math.cos(radial * 15 + p4);
+
+  if (kind === "flower") return flower;
+  if (kind === "star") return star;
+  if (kind === "ribbons") return ribbons;
+  if (kind === "diamonds") return diamonds;
+  if (kind === "petals") return petals;
+  if (kind === "mosaic") return mosaic;
+
+  return 0.32 * flower + 0.28 * star + 0.2 * ribbons + 0.2 * diamonds;
+}
+
+function inferHexGridCoordinates(nodes) {
+  const sorted = [...nodes].sort((a, b) => a.y - b.y || a.x - b.x);
+  let rowIndex = -1;
+  let currentRowY = Number.NEGATIVE_INFINITY;
+  const rowTolerance = viewBox.height * 0.006;
+
+  for (const node of sorted) {
+    if (Math.abs(node.y - currentRowY) > rowTolerance) {
+      rowIndex += 1;
+      currentRowY = node.y;
+    }
+    node.r = rowIndex;
+  }
+
+  const rows = new Map();
+  for (const node of sorted) {
+    if (!rows.has(node.r)) rows.set(node.r, []);
+    rows.get(node.r).push(node);
+  }
+  for (const row of rows.values()) {
+    row.sort((a, b) => a.x - b.x);
+    row.forEach((node, index) => {
+      node.q = index - Math.floor(row.length / 2);
+    });
+  }
+}
+
+function getColorableHexPaths() {
+  if (!svgRoot) return [];
+  return Array.from(svgRoot.querySelectorAll("path")).filter((path) => {
+    const fill = getFillValue(path);
+    return fill && fill.toLowerCase() !== "none";
+  });
+}
+
+function applyRandomPatternFromControls() {
+  if (!originalSvgText) {
+    setStatus("SVG not loaded yet.");
+    return;
+  }
+  insertSvg(originalSvgText);
+
+  const seedInput = document.getElementById("randomSeedInput");
+  const motifInput = document.getElementById("randomMotifSelect");
+  const contrastInput = document.getElementById("randomContrastInput");
+  const whitenessInput = document.getElementById("randomWhitenessInput");
+  const seedText = seedInput?.value || "mandala-random-001";
+  const motif = motifInput?.value || "auto";
+  const contrast = Number(contrastInput?.value || 6);
+  const whiteness = Number(whitenessInput?.value || 4);
+  setPalette(paletteSelect?.value || "purple");
+  const colorPalette = activePalette.filter((entry) => entry.hex.toLowerCase() !== "#ffffff");
+  const hashed = hashString(`${seedText}|${paletteSelect?.value || "purple"}|${motif}|${contrast}|${whiteness}`)();
+  const rng = mulberry32(hashed);
+  const motifKind = motif === "auto" ? RANDOM_MOTIFS[1 + Math.floor(rng() * (RANDOM_MOTIFS.length - 1))] : motif;
+  const phases = [rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2];
+  const ringBias = 0.85 + rng() * 0.45;
+  const angleBias = 0.8 + rng() * 0.9;
+  const accentBias = 0.55 + rng() * 0.6;
+  const paths = getColorableHexPaths();
+  if (!paths.length) {
+    setStatus("SVG loaded, but no colorable hexagons were found.");
+    return;
+  }
+  const center = { x: viewBox.width / 2, y: viewBox.height / 2 };
+  const maxRadius = Math.min(viewBox.width, viewBox.height) * 0.5 || 1;
+  const nodes = paths.map((path) => {
+    const point = getPathCenterInViewBox(path);
+    return { path, x: point.x, y: point.y, q: 0, r: 0 };
+  });
+
+  inferHexGridCoordinates(nodes);
+
+  for (const node of nodes) {
+    const dx = node.x - center.x;
+    const dy = node.y - center.y;
+    const theta = Math.atan2(dy, dx);
+    const radial = clamp01(Math.hypot(dx, dy) / maxRadius);
+    const wedge = mod(theta, Math.PI / 3);
+    const folded = Math.min(wedge, Math.PI / 3 - wedge);
+    const localAngleNorm = folded / (Math.PI / 6);
+    const ring = Math.hypot(node.q, node.r);
+    const metrics = { radial, localAngleNorm, ring, q: node.q, r: node.r, theta };
+    const value = randomMotifValue(motifKind, metrics, phases);
+    const bias =
+      0.15 * Math.cos(radial * 10 * ringBias + phases[0]) +
+      0.15 * Math.sin(localAngleNorm * Math.PI * 4 * angleBias + phases[1]) +
+      0.06 * Math.cos(theta * 6 + phases[2]);
+    const normalized = clamp01(0.5 + 0.5 * Math.tanh((value + bias) * (1.15 + contrast * 0.18)));
+    const colorIndex = Math.min(colorPalette.length - 1, Math.floor(normalized * colorPalette.length));
+    const accentField =
+      Math.abs(
+        Math.sin(ring * 0.95 * accentBias + localAngleNorm * Math.PI * 5 + phases[2]) +
+          0.35 * Math.cos(radial * 18 + phases[3])
+      ) / 1.35;
+    const makeWhite = radial < 0.08 || (radial < 0.93 && accentField > 0.84 - whiteness * 0.035);
+    setFillValue(node.path, makeWhite ? "#ffffff" : colorPalette[colorIndex].hex);
+  }
+
+  setStatus(`Randomized ${nodes.length} hexagons with ${motifKind} motif.`);
 }
 
 function nearestPaletteEntry(r, g, b) {
@@ -506,7 +685,170 @@ function resetSvg() {
     return;
   }
   insertSvg(originalSvgText);
+  if (imageReady) {
+    canvas.width = viewBox.width;
+    canvas.height = viewBox.height;
+    drawImageToCanvas();
+  }
   setStatus("SVG reset to original colors.");
+}
+
+function useOriginalSvgForRandomPattern() {
+  if (!originalSvgText) {
+    setStatus("SVG not loaded yet.");
+    return false;
+  }
+  insertSvg(originalSvgText);
+  layoutReady = false;
+  requestAnimationFrame(() => {
+    layoutReady = true;
+  });
+  if (imageReady) {
+    canvas.width = viewBox.width;
+    canvas.height = viewBox.height;
+    drawImageToCanvas();
+  }
+  return true;
+}
+
+function randomizeSeedAndApply() {
+  const seedInput = document.getElementById("randomSeedInput");
+  if (seedInput) {
+    seedInput.value = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  }
+  applyRandomPatternFromControls();
+}
+
+function createTabbedControls() {
+  const controls = document.querySelector(".controls");
+  if (!controls || document.getElementById("controlTabs")) {
+    return;
+  }
+
+  if (!document.getElementById("randomPrintStyles")) {
+    const style = document.createElement("style");
+    style.id = "randomPrintStyles";
+    style.textContent = `
+      @page { size: A4 portrait; margin: 0; }
+      @media print {
+        .hero, .controls, .status, #overlayCanvas { display: none !important; }
+        .page, .panel, .stage, .canvas-wrap { display: block !important; margin: 0 !important; padding: 0 !important; max-width: none !important; border: 0 !important; box-shadow: none !important; background: #fff !important; }
+        .canvas-wrap { width: 210mm !important; border-radius: 0 !important; overflow: visible !important; }
+        #svgLayer svg { width: 210mm !important; height: 297mm !important; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  const imagePanel = document.createElement("div");
+  imagePanel.id = "imageTabPanel";
+  imagePanel.className = "tab-panel";
+  while (controls.firstChild) {
+    imagePanel.appendChild(controls.firstChild);
+  }
+
+  const randomPanel = document.createElement("div");
+  randomPanel.id = "randomTabPanel";
+  randomPanel.className = "tab-panel";
+  randomPanel.hidden = true;
+  randomPanel.innerHTML = `
+    <fieldset id="randomPatternControls" class="control">
+      <legend>Random pattern generator</legend>
+    <label>
+      <span>Seed</span>
+      <input type="text" id="randomSeedInput" value="mandala-random-001" />
+    </label>
+    <label>
+      <span>Motif family</span>
+      <select id="randomMotifSelect">
+        ${RANDOM_MOTIFS.map((motif) => `<option value="${motif}">${motif}</option>`).join("")}
+      </select>
+    </label>
+    <label>
+      <span>Palette</span>
+      <p class="status">Uses the palette selected in the Image tab.</p>
+    </label>
+    <label>
+      <span>Contrast <strong class="value" id="randomContrastValue">6</strong></span>
+      <input type="range" id="randomContrastInput" min="1" max="10" step="1" value="6" />
+    </label>
+    <label>
+      <span>White accents <strong class="value" id="randomWhitenessValue">4</strong></span>
+      <input type="range" id="randomWhitenessInput" min="0" max="10" step="1" value="4" />
+    </label>
+    <div class="buttons">
+      <button id="generatePatternBtn" type="button">Generate</button>
+      <button id="randomPatternBtn" type="button">Randomize</button>
+      <button id="resetRandomBtn" type="button">Reset SVG</button>
+      <button id="downloadRandomBtn" type="button">Download SVG</button>
+    </div>
+    </fieldset>
+  `;
+  const tabButtons = document.createElement("div");
+  tabButtons.id = "controlTabs";
+  tabButtons.className = "buttons";
+  tabButtons.innerHTML = `
+    <button id="imageTabBtn" type="button" aria-pressed="true">Image</button>
+    <button id="randomTabBtn" type="button" aria-pressed="false">Random</button>
+  `;
+
+  controls.appendChild(tabButtons);
+  controls.appendChild(imagePanel);
+  controls.appendChild(randomPanel);
+
+  const randomFieldset = document.getElementById("randomPatternControls");
+  randomFieldset.style.border = "1px solid var(--panel-edge)";
+  randomFieldset.style.borderRadius = "16px";
+  randomFieldset.style.padding = "14px";
+  randomFieldset.querySelectorAll("label").forEach((label) => {
+    label.style.display = "grid";
+    label.style.gap = "8px";
+    label.style.marginTop = "10px";
+  });
+  randomFieldset.querySelectorAll("input[type='text'], select").forEach((input) => {
+    input.style.border = "1px solid var(--panel-edge)";
+    input.style.borderRadius = "12px";
+    input.style.padding = "10px 12px";
+  });
+  tabButtons.querySelectorAll("button").forEach((button) => {
+    button.style.background = "var(--panel-edge)";
+    button.style.color = "var(--ink)";
+  });
+  document.getElementById("imageTabBtn").style.background = "var(--accent)";
+  document.getElementById("imageTabBtn").style.color = "#fff";
+
+  const setActiveTab = (tab) => {
+    const imageActive = tab === "image";
+    imagePanel.hidden = !imageActive;
+    randomPanel.hidden = imageActive;
+    document.getElementById("imageTabBtn").setAttribute("aria-pressed", `${imageActive}`);
+    document.getElementById("randomTabBtn").setAttribute("aria-pressed", `${!imageActive}`);
+    document.getElementById("imageTabBtn").style.background = imageActive ? "var(--accent)" : "var(--panel-edge)";
+    document.getElementById("imageTabBtn").style.color = imageActive ? "#fff" : "var(--ink)";
+    document.getElementById("randomTabBtn").style.background = imageActive ? "var(--panel-edge)" : "var(--accent)";
+    document.getElementById("randomTabBtn").style.color = imageActive ? "var(--ink)" : "#fff";
+    overlayCanvas.style.display = imageActive ? "" : "none";
+    if (!imageActive) {
+      useOriginalSvgForRandomPattern();
+    }
+  };
+
+  const bindValue = (inputId, valueId, format = (value) => value) => {
+    const input = document.getElementById(inputId);
+    const value = document.getElementById(valueId);
+    input?.addEventListener("input", () => {
+      value.textContent = format(input.value);
+    });
+  };
+
+  bindValue("randomContrastInput", "randomContrastValue");
+  bindValue("randomWhitenessInput", "randomWhitenessValue");
+  document.getElementById("imageTabBtn")?.addEventListener("click", () => setActiveTab("image"));
+  document.getElementById("randomTabBtn")?.addEventListener("click", () => setActiveTab("random"));
+  document.getElementById("generatePatternBtn")?.addEventListener("click", applyRandomPatternFromControls);
+  document.getElementById("randomPatternBtn")?.addEventListener("click", randomizeSeedAndApply);
+  document.getElementById("resetRandomBtn")?.addEventListener("click", resetSvg);
+  document.getElementById("downloadRandomBtn")?.addEventListener("click", downloadSvg);
 }
 
 opacityInput.addEventListener("input", (event) => {
@@ -644,6 +986,7 @@ downloadBtn.addEventListener("click", downloadSvg);
 
 async function init() {
   try {
+    createTabbedControls();
     const response = await fetch(encodeURI(svgPath));
     if (!response.ok) {
       throw new Error("Failed to load SVG.");
