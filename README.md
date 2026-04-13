@@ -1,6 +1,9 @@
-# Mandala Color Mapper
+# Mandala Color Generator
 
-A web application for creating and color-mapping mandala designs, specifically tailored for the "Quercetti Fantacolor Mandala" toy. It supports mapping raster images to a hexagonal grid and procedural pattern generation.
+A web application for creating and color-mapping mandala designs, specifically tailored for the [Quercetti Fantacolor Mandala](https://www.youtube.com/watch?v=VXxuqUFme4g) toy (discontinued?). The toy holds paper maps to guide the placement of colored nails along an hexagonal grid. 
+
+This software  maps raster images to the hexagonal grid as well as procedural pattern generation. The output must be printed at 100% scale (5.16 mm grid spacing).
+
 
 ## Features
 
@@ -16,19 +19,14 @@ A web application for creating and color-mapping mandala designs, specifically t
 - **Seedable Generation**: Use unique seeds to recreate or share specific patterns.
 - **Customizable Aesthetics**: Fine-tune contrast and "white accents" for varied visual styles.
 
-### 3. Export & Print
-- **SVG Export**: Download the colored mandala as a high-quality, editable SVG file.
-- **PDF Generation**: Use the "Print/Download" button to trigger a print-ready A4 layout, optimized for physical templates.
-
 ## Technical Details
 
-- **Modular Architecture**: The application is built using a custom "engine" approach with ES6 modules for clean separation of concerns:
+AI-generated code. The application is built using a custom "engine" approach with ES6 modules for clean separation of concerns:
   - `image-engine.js`: Canvas drawing and dithering.
   - `pattern-engine.js`: Procedural generation and symmetry math.
   - `svg-engine.js`: SVG parsing and hex-grid coordinate inference.
   - `color-engine.js`: Palette management and quantization.
   - `ui-engine.js`: Real-time status updates and color legends.
-- **Grid Geometry**: The hexagonal grid spacing is optimized for a **5.16 mm** physical layout.
 
 ## Running Locally
 
@@ -43,6 +41,8 @@ Due to the use of ES6 modules, the application must be served over HTTP(S).
    npx serve .
    ```
 3. Open `http://localhost:8000` (or the provided port) in your browser.
+
+Also hosted at https://tonigi.github.io/mandalagen/ 
 
 ## Credits & Data
 - **Model SVG**: `data/onepage_model.svg` serves as the base template.
