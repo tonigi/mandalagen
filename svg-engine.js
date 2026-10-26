@@ -80,30 +80,3 @@ export function getColorableHexPaths(svgRoot) {
     return fill && fill.toLowerCase() !== "none" && getHexVertices(path) !== null;
   });
 }
-
-export function inferHexGridCoordinates(nodes, viewBox) {
-  const sorted = [...nodes].sort((a, b) => a.y - b.y || a.x - b.x);
-  let rowIndex = -1;
-  let currentRowY = Number.NEGATIVE_INFINITY;
-  const rowTolerance = viewBox.height * 0.006;
-
-  for (const node of sorted) {
-    if (Math.abs(node.y - currentRowY) > rowTolerance) {
-      rowIndex += 1;
-      currentRowY = node.y;
-    }
-    node.r = rowIndex;
-  }
-
-  const rows = new Map();
-  for (const node of sorted) {
-    if (!rows.has(node.r)) rows.set(node.r, []);
-    rows.get(node.r).push(node);
-  }
-  for (const row of rows.values()) {
-    row.sort((a, b) => a.x - b.x);
-    row.forEach((node, index) => {
-      node.q = index - Math.floor(row.length / 2);
-    });
-  }
-}

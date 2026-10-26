@@ -1,52 +1,22 @@
-import { buildSymmetryOrbits } from './symmetry-engine.js';
-import { createDrawingControls } from './drawing-engine.js';
-import {
-  RANDOM_MOTIFS,
-  RANDOM_MOTIF_DESCRIPTIONS,
-  RANDOM_SYMMETRIES,
-  svgPath
-} from './constants.js';
+import { bindImageControls } from './image-controls.js';
+import { svgPath } from './constants.js';
+import { parseViewBox } from './svg-engine.js';
+import { buildFixedPalette } from './color-engine.js';
+import { setStatus, updateColorCounts } from './ui-engine.js';
+import { drawImageToCanvas, applyColors } from './image-engine.js';
+import { generatePattern } from './pattern-engine.js';
+import { createBoardModel } from './board-model.js';
+import { createAppState } from './app-state.js';
+import { createControls } from './controls.js';
 
-import {
-  clamp,
-  hashString,
-  mulberry32,
-  getPathCenterInViewBox
-} from './utils.js';
-
-import {
-  parseViewBox,
-  setFillValue,
-  getColorableHexPaths,
-  inferHexGridCoordinates
-} from './svg-engine.js';
-
-import {
-  buildFixedPalette
-} from './color-engine.js';
-
-import {
-  setStatus,
-  updateColorCounts
-} from './ui-engine.js';
-
-import {
-  drawImageToCanvas,
-  applyColors
-} from './image-engine.js';
-
-import {
-  getSymmetryConfig,
-  getMetricsForNode,
-  resolveRandomFill
-} from './pattern-engine.js';
+const state = createAppState();
+let board = null;
 
 // DOM Elements
 const svgLayer = document.getElementById("svgLayer");
 const imageInput = document.getElementById("imageInput");
 const overlayCanvas = document.getElementById("overlayCanvas");
 const opacityInput = document.getElementById("opacityInput");
-const paletteSelect = document.getElementById("paletteSelect");
 const ditherSelect = document.getElementById("ditherSelect");
 const scaleInput = document.getElementById("scaleInput");
 const canvasWrap = document.getElementById("canvasWrap");
@@ -66,11 +36,6 @@ const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const colorCountsEl = document.createElement("div");
 colorCountsEl.id = "colorCounts";
 colorCountsEl.className = "status";
-colorCountsEl.style.display = "flex";
-colorCountsEl.style.flexWrap = "wrap";
-colorCountsEl.style.justifyContent = "center";
-colorCountsEl.style.gap = "8px";
-colorCountsEl.style.marginTop = "8px";
 statusEl.insertAdjacentElement("afterend", colorCountsEl);
 
 // State
@@ -80,13 +45,9 @@ let viewBox = { width: 0, height: 0 };
 let currentImageUrl = "";
 let sourceImage = null;
 let imageReady = false;
-let activePalette = [];
 let layoutReady = false;
-let isDragging = false;
-let lastPointer = { x: 0, y: 0 };
 let applyTimeout = null;
 let ditherMode = "none";
-let activeTab = "image";
 let drawing;
 let imageLoadVersion = 0;
 
@@ -120,23 +81,25 @@ function insertSvg(svgText) {
   svgLayer.innerHTML = "";
   svgRoot = document.importNode(svg, true);
   svgLayer.appendChild(svgRoot);
+  board = createBoardModel(svgRoot, viewBox);
+  drawing?.updateButtons();
 }
 
 function handleApplyColors() {
-  if (activeTab !== "image") return;
+  if (state.value.activeTab !== "image") return;
   drawing?.clearHistory();
   applyColors({
-    svgRoot,
+    board,
     imageReady,
     canvas,
     ctx,
     viewBox,
     ditherMode,
-    activePalette,
+    activePalette: buildFixedPalette(state.value.palette),
     sourceImage,
     imageTransform,
     onStatusUpdate: (msg) => setStatus(statusEl, msg),
-    onComplete: () => updateColorCounts(svgRoot, colorCountsEl, paletteSelect?.value)
+    onComplete: () => updateColorCounts(board, colorCountsEl, state.value.palette)
   });
 }
 
@@ -146,7 +109,7 @@ function scheduleApplyColors(delayMs = 150) {
   }
   applyTimeout = window.setTimeout(() => {
     applyTimeout = null;
-    if (activeTab !== "image") return;
+    if (state.value.activeTab !== "image") return;
     if (layoutReady) {
       handleApplyColors();
     } else {
@@ -233,7 +196,7 @@ function resetSvg() {
     drawImageToCanvas(sourceImage, canvas, ctx, viewBox, imageTransform);
   }
   setStatus(statusEl, "SVG reset to original colors.");
-  updateColorCounts(svgRoot, colorCountsEl, paletteSelect?.value);
+  updateColorCounts(board, colorCountsEl, state.value.palette);
 }
 
 function applyRandomPatternFromControls() {
@@ -245,372 +208,30 @@ function applyRandomPatternFromControls() {
   }
   insertSvg(originalSvgText);
 
-  const seedInput = document.getElementById("randomSeedInput");
-  const motifInput = document.getElementById("randomMotifSelect");
-  const symmetryInput = document.getElementById("randomSymmetrySelect");
-  const randomPaletteInput = document.getElementById("randomPaletteSelect");
-  const contrastInput = document.getElementById("randomContrastInput");
-  const whitenessInput = document.getElementById("randomWhitenessInput");
-  
-  const seedText = seedInput?.value || "mandala-random-001";
-  const motif = motifInput?.value || "auto";
-  const symmetry = getSymmetryConfig(symmetryInput?.value || "c6-mirror-vertex");
-  const paletteMode = randomPaletteInput?.value || paletteSelect?.value || "purple";
-  const contrast = Number(contrastInput?.value || 6);
-  const whiteness = Number(whitenessInput?.value || 4);
-  
-  activePalette = buildFixedPalette(paletteMode);
-  const colorPalette = activePalette.filter((entry) => entry.hex.toLowerCase() !== "#ffffff");
-  const hashed = hashString(`${seedText}|${paletteMode}|${motif}|${symmetry.value}|${contrast}|${whiteness}`)();
-  const rng = mulberry32(hashed);
-  const motifKind = motif === "auto" ? RANDOM_MOTIFS[1 + Math.floor(rng() * (RANDOM_MOTIFS.length - 1))] : motif;
-  const phases = [rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2];
-  const paths = getColorableHexPaths(svgRoot);
-  if (!paths.length) {
+  if (!board.cells.length) {
     setStatus(statusEl, "SVG loaded, but no colorable hexagons were found.");
     return;
   }
-  const nodes = paths.map((path) => {
-    const point = getPathCenterInViewBox(path, svgRoot, viewBox);
-    return { path, x: point.x, y: point.y, q: 0, r: 0 };
-  });
-
-  inferHexGridCoordinates(nodes, viewBox);
-
-  const center = {
-    x: (Math.min(...nodes.map(n => n.x)) + Math.max(...nodes.map(n => n.x))) / 2,
-    y: (Math.min(...nodes.map(n => n.y)) + Math.max(...nodes.map(n => n.y))) / 2,
-  };
-  const maxRadius = Math.max(...nodes.map(n => Math.hypot(n.x - center.x, n.y - center.y))) || 1;
-  const orbits = buildSymmetryOrbits(paths, symmetry);
-  const painted = new Set();
-  for (const node of nodes) {
-    if (painted.has(node.path)) continue;
-    const metrics = getMetricsForNode(node, center, maxRadius, symmetry);
-    const fill = resolveRandomFill(metrics, motifKind, phases, colorPalette, contrast, whiteness);
-    for (const partner of orbits.get(node.path)) {
-      setFillValue(partner, fill);
-      painted.add(partner);
-    }
-  }
-
-  setStatus(statusEl, `Randomized ${nodes.length} hexagons with ${motifKind} motif.`);
-  updateColorCounts(svgRoot, colorCountsEl, paletteSelect?.value);
+  const motifKind = generatePattern(board, state.value);
+  setStatus(statusEl, `Randomized ${board.cells.length} hexagons with ${motifKind} motif.`);
+  updateColorCounts(board, colorCountsEl, state.value.palette);
 }
 
-function createTabbedControls() {
-  const controls = document.querySelector(".controls");
-  if (!controls || document.getElementById("controlTabs")) {
-    return;
-  }
+// UI wiring. Image controls hold only transient pointer state.
+const imageControls = bindImageControls({
+  overlayCanvas, canvasWrap, imageInput, opacityInput, ditherSelect,
+  scaleInput, translateXInput, translateYInput,
+  isReady: () => imageReady, getSvg: () => svgRoot, getViewBox: () => viewBox,
+  onTransform: updateTransformValues, onImage: loadImage,
+  onDither: value => { ditherMode = value; if (imageReady) scheduleApplyColors(); },
+});
 
-  if (!document.getElementById("randomPrintStyles")) {
-    const style = document.createElement("style");
-    style.id = "randomPrintStyles";
-    style.textContent = `
-      @page { size: A4 portrait; margin: 0; }
-      @media print {
-        .hero, .controls, .status, #overlayCanvas { display: none !important; }
-        .page, .panel, .stage, .canvas-wrap { display: block !important; margin: 0 !important; padding: 0 !important; max-width: none !important; border: 0 !important; box-shadow: none !important; background: #fff !important; }
-        .canvas-wrap { width: 210mm !important; border-radius: 0 !important; overflow: visible !important; }
-        #svgLayer svg { width: 210mm !important; height: 297mm !important; }
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  const imagePanel = document.createElement("div");
-  imagePanel.id = "imageTabPanel";
-  imagePanel.className = "tab-panel";
-  while (controls.firstChild) {
-    imagePanel.appendChild(controls.firstChild);
-  }
-
-  const randomPanel = document.createElement("div");
-  randomPanel.id = "randomTabPanel";
-  randomPanel.className = "tab-panel";
-  randomPanel.hidden = true;
-  randomPanel.innerHTML = `
-    <fieldset id="randomPatternControls" class="control">
-      <legend>Random pattern generator</legend>
-    <label>
-      <span>Seed</span>
-      <input type="text" id="randomSeedInput" value="mandala-random-001" />
-    </label>
-    <label>
-      <span>Motif family</span>
-      <select id="randomMotifSelect">
-        ${RANDOM_MOTIFS.map((motif) => `<option value="${motif}">${motif}</option>`).join("")}
-      </select>
-      <p class="status" id="randomMotifDescription"></p>
-    </label>
-    <label>
-      <span>Symmetry</span>
-      <select id="randomSymmetrySelect">
-        ${RANDOM_SYMMETRIES.map((symmetry) => `<option value="${symmetry.value}">${symmetry.label}</option>`).join("")}
-      </select>
-    </label>
-    <label>
-      <span>Palette</span>
-      <select id="randomPaletteSelect">
-        ${Array.from(paletteSelect.options)
-          .map((option) => `<option value="${option.value}">${option.textContent}</option>`)
-          .join("")}
-      </select>
-    </label>
-    <label>
-      <span>Contrast <strong class="value" id="randomContrastValue">6</strong></span>
-      <input type="range" id="randomContrastInput" min="1" max="10" step="1" value="6" />
-    </label>
-    <label>
-      <span>White accents <strong class="value" id="randomWhitenessValue">4</strong></span>
-      <input type="range" id="randomWhitenessInput" min="0" max="10" step="1" value="4" />
-    </label>
-    <div class="buttons">
-      <button id="generatePatternBtn" type="button">Generate</button>
-      <button id="randomPatternBtn" type="button">Randomize</button>
-      <button id="resetRandomBtn" type="button">Reset SVG</button>
-      <button id="downloadRandomBtn" type="button">Download SVG</button>
-      <button id="printRandomBtn" type="button">Print/Download</button>
-    </div>
-    </fieldset>
-  `;
-  drawing = createDrawingControls({ svgLayer, getSvg: () => svgRoot,
-    isActive: () => activeTab === "draw",
-    onSymmetryChange: (value) => { document.getElementById("randomSymmetrySelect").value = value; },
-    onChange: () => updateColorCounts(svgRoot, colorCountsEl, paletteSelect.value),
-    downloadSvg, print: () => window.print() });
-  const randomSymmetrySelect = randomPanel.querySelector("#randomSymmetrySelect");
-  drawing.setSymmetry(randomSymmetrySelect.value);
-  randomSymmetrySelect.addEventListener("change", () => drawing.setSymmetry(randomSymmetrySelect.value));
-  const drawPanel = drawing.panel;
-  const tabButtons = document.createElement("div");
-  tabButtons.id = "controlTabs";
-  tabButtons.className = "buttons";
-  tabButtons.innerHTML = `
-    <button id="imageTabBtn" type="button" aria-pressed="true">Image</button>
-    <button id="randomTabBtn" type="button" aria-pressed="false">Random</button>
-    <button id="drawTabBtn" type="button" aria-pressed="false">Draw</button>
-  `;
-
-  controls.appendChild(tabButtons);
-  controls.appendChild(imagePanel);
-  controls.appendChild(randomPanel);
-  controls.appendChild(drawPanel);
-
-  const randomFieldset = document.getElementById("randomPatternControls");
-  randomFieldset.style.border = "1px solid var(--panel-edge)";
-  randomFieldset.style.borderRadius = "16px";
-  randomFieldset.style.padding = "14px";
-  randomFieldset.querySelectorAll("label").forEach((label) => {
-    label.style.display = "grid";
-    label.style.gap = "8px";
-    label.style.marginTop = "10px";
-  });
-  randomFieldset.querySelectorAll("input[type='text'], select").forEach((input) => {
-    input.style.border = "1px solid var(--panel-edge)";
-    input.style.borderRadius = "12px";
-    input.style.padding = "10px 12px";
-  });
-  tabButtons.querySelectorAll("button").forEach((button) => {
-    button.style.background = "var(--panel-edge)";
-    button.style.color = "var(--ink)";
-  });
-  document.getElementById("imageTabBtn").style.background = "var(--accent)";
-  document.getElementById("imageTabBtn").style.color = "#fff";
-
-  const setActiveTab = (tab) => {
-    drawing.finishStroke();
-    cancelPendingApply();
-    endDrag();
-    activeTab = tab;
-    for (const [name, panel] of [["image", imagePanel], ["random", randomPanel], ["draw", drawPanel]]) {
-      const selected = name === tab;
-      panel.hidden = !selected;
-      const button = document.getElementById(`${name}TabBtn`);
-      button.setAttribute("aria-pressed", `${selected}`);
-      button.style.background = selected ? "var(--accent)" : "var(--panel-edge)";
-      button.style.color = selected ? "#fff" : "var(--ink)";
-    }
-    overlayCanvas.style.display = tab === "image" ? "" : "none";
-    svgLayer.classList.toggle("drawing", tab === "draw");
-  };
-
-  const bindValue = (inputId, valueId, format = (value) => value) => {
-    const input = document.getElementById(inputId);
-    const value = document.getElementById(valueId);
-    input?.addEventListener("input", () => {
-      value.textContent = format(input.value);
-    });
-  };
-
-  bindValue("randomContrastInput", "randomContrastValue");
-  bindValue("randomWhitenessInput", "randomWhitenessValue");
-  const motifSelect = document.getElementById("randomMotifSelect");
-  const motifDescription = document.getElementById("randomMotifDescription");
-  const updateMotifDescription = () => {
-    motifDescription.textContent = RANDOM_MOTIF_DESCRIPTIONS[motifSelect.value] || "";
-  };
-  motifSelect?.addEventListener("change", updateMotifDescription);
-  updateMotifDescription();
-  const randomPaletteSelect = document.getElementById("randomPaletteSelect");
-  if (randomPaletteSelect) {
-    randomPaletteSelect.value = paletteSelect.value;
-    randomPaletteSelect.addEventListener("change", (event) => {
-      paletteSelect.value = event.target.value;
-      activePalette = buildFixedPalette(event.target.value);
-    });
-  }
-  document.getElementById("drawTabBtn").addEventListener("click", () => setActiveTab("draw"));
-  document.getElementById("imageTabBtn")?.addEventListener("click", () => setActiveTab("image"));
-  document.getElementById("randomTabBtn")?.addEventListener("click", () => setActiveTab("random"));
-  document.getElementById("generatePatternBtn")?.addEventListener("click", applyRandomPatternFromControls);
-  document.getElementById("randomPatternBtn")?.addEventListener("click", () => {
-    const seedInput = document.getElementById("randomSeedInput");
-    if (seedInput) {
-      seedInput.value = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    }
-    applyRandomPatternFromControls();
-  });
-  document.getElementById("resetRandomBtn")?.addEventListener("click", resetSvg);
-  document.getElementById("downloadRandomBtn")?.addEventListener("click", downloadSvg);
-  document.getElementById("printRandomBtn")?.addEventListener("click", () => window.print());
-}
-
-// Event Listeners
 printBtn.addEventListener("click", () => window.print());
-opacityInput.addEventListener("input", (event) => {
-  overlayCanvas.style.opacity = event.target.value;
+
+state.subscribe((value, previous) => {
+  if (value.palette !== previous.palette && imageReady && value.activeTab === 'image') scheduleApplyColors();
 });
 
-paletteSelect.addEventListener("change", (event) => {
-  activePalette = buildFixedPalette(event.target.value);
-  const randomPaletteSelect = document.getElementById("randomPaletteSelect");
-  if (randomPaletteSelect) {
-    randomPaletteSelect.value = event.target.value;
-  }
-  if (imageReady) {
-    scheduleApplyColors();
-  }
-});
-
-ditherSelect.addEventListener("change", (event) => {
-  ditherMode = event.target.value;
-  if (imageReady) {
-    scheduleApplyColors();
-  }
-});
-
-scaleInput.addEventListener("input", updateTransformValues);
-translateXInput.addEventListener("input", updateTransformValues);
-translateYInput.addEventListener("input", updateTransformValues);
-
-overlayCanvas.addEventListener("pointerdown", (event) => {
-  if (!imageReady || event.button !== 0) {
-    return;
-  }
-  isDragging = true;
-  overlayCanvas.setPointerCapture(event.pointerId);
-  overlayCanvas.style.cursor = "grabbing";
-  lastPointer = { x: event.clientX, y: event.clientY };
-});
-
-overlayCanvas.addEventListener("pointermove", (event) => {
-  if (!isDragging || !svgRoot) {
-    return;
-  }
-  const svgRect = svgRoot.getBoundingClientRect();
-  if (!svgRect.width || !svgRect.height) {
-    return;
-  }
-  const dx = event.clientX - lastPointer.x;
-  const dy = event.clientY - lastPointer.y;
-  lastPointer = { x: event.clientX, y: event.clientY };
-  const dxView = (dx / svgRect.width) * viewBox.width;
-  const dyView = (dy / svgRect.height) * viewBox.height;
-  const nextX = clamp(
-    Number(translateXInput.value) + dxView,
-    Number(translateXInput.min),
-    Number(translateXInput.max)
-  );
-  const nextY = clamp(
-    Number(translateYInput.value) + dyView,
-    Number(translateYInput.min),
-    Number(translateYInput.max)
-  );
-  translateXInput.value = `${nextX}`;
-  translateYInput.value = `${nextY}`;
-  updateTransformValues();
-});
-
-function endDrag(event) {
-  if (!isDragging) {
-    return;
-  }
-  isDragging = false;
-  overlayCanvas.style.cursor = "grab";
-  if (event && overlayCanvas.hasPointerCapture(event.pointerId)) {
-    overlayCanvas.releasePointerCapture(event.pointerId);
-  }
-}
-
-overlayCanvas.addEventListener("pointerup", endDrag);
-overlayCanvas.addEventListener("pointercancel", endDrag);
-overlayCanvas.addEventListener("lostpointercapture", endDrag);
-overlayCanvas.addEventListener(
-  "wheel",
-  (event) => {
-    if (!imageReady) {
-      return;
-    }
-    event.preventDefault();
-    const scaleMin = Number(scaleInput.min);
-    const scaleMax = Number(scaleInput.max);
-    const current = Number(scaleInput.value);
-    const factor = 1 - event.deltaY * 0.001;
-    const next = clamp(current * factor, scaleMin, scaleMax);
-    scaleInput.value = `${next}`;
-    updateTransformValues();
-  },
-  { passive: false }
-);
-
-imageInput.addEventListener("change", (event) => {
-  const file = event.target.files[0];
-  if (!file) {
-    return;
-  }
-  loadImage(file);
-});
-
-window.addEventListener("paste", (event) => {
-  const items = event.clipboardData?.items;
-  if (!items) {
-    return;
-  }
-  for (const item of items) {
-    if (item.type && item.type.startsWith("image/")) {
-      const file = item.getAsFile();
-      if (file) {
-        loadImage(file);
-      }
-      break;
-    }
-  }
-});
-
-canvasWrap.addEventListener("dragover", (event) => {
-  event.preventDefault();
-});
-
-canvasWrap.addEventListener("drop", (event) => {
-  event.preventDefault();
-  const file = event.dataTransfer?.files?.[0];
-  if (!file || !file.type.startsWith("image/")) {
-    return;
-  }
-  loadImage(file);
-});
 
 applyBtn.addEventListener("click", handleApplyColors);
 resetBtn.addEventListener("click", resetSvg);
@@ -619,14 +240,19 @@ downloadBtn.addEventListener("click", downloadSvg);
 // Init
 async function init() {
   try {
-    createTabbedControls();
+    drawing = createControls({
+      state, svgLayer, overlayCanvas, getBoard: () => board,
+      onChange: () => updateColorCounts(board, colorCountsEl, state.value.palette),
+      onModeChange: () => { cancelPendingApply(); imageControls.endDrag(); },
+      generate: applyRandomPatternFromControls, reset: resetSvg,
+      download: downloadSvg, print: () => window.print(),
+    });
     const response = await fetch(encodeURI(svgPath));
     if (!response.ok) {
       throw new Error("Failed to load SVG.");
     }
     originalSvgText = await response.text();
     insertSvg(originalSvgText);
-    activePalette = buildFixedPalette(paletteSelect?.value);
     ditherMode = ditherSelect?.value || "none";
     
     const translateRangeX = Math.round(viewBox.width * 0.35);
@@ -641,7 +267,7 @@ async function init() {
       layoutReady = true;
     });
     setStatus(statusEl, "SVG loaded. Upload an image to begin.");
-    updateColorCounts(svgRoot, colorCountsEl, paletteSelect?.value);
+    updateColorCounts(board, colorCountsEl, state.value.palette);
   } catch (error) {
     console.error(error);
     setStatus(statusEl, "Could not load the SVG file.");

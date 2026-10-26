@@ -1,6 +1,5 @@
 import { BAYER_4X4, DITHER_STRENGTH } from './constants.js';
-import { clamp, getPathCenterInViewBox } from './utils.js';
-import { getFillValue, setFillValue, getColorableHexPaths } from './svg-engine.js';
+import { clamp } from './utils.js';
 import { nearestPaletteEntry } from './color-engine.js';
 
 export function orderedDitherOffset(x, y) {
@@ -43,7 +42,7 @@ export function drawImageToCanvas(sourceImage, canvas, ctx, viewBox, imageTransf
 }
 
 export function applyColors({
-  svgRoot,
+  board,
   imageReady,
   canvas,
   ctx,
@@ -55,19 +54,14 @@ export function applyColors({
   onStatusUpdate,
   onComplete
 }) {
-  if (!svgRoot || !imageReady || !canvas.width || !canvas.height) return;
+  if (!board || !imageReady || !canvas.width || !canvas.height) return;
 
   drawImageToCanvas(sourceImage, canvas, ctx, viewBox, imageTransform);
 
-  const paths = getColorableHexPaths(svgRoot);
   const nodes = [];
-
-  paths.forEach((path) => {
-    const fill = getFillValue(path);
-    if (!fill || fill.toLowerCase() === "none") return;
-    
-    setFillValue(path, "#ffffff");
-    const center = getPathCenterInViewBox(path, svgRoot, viewBox);
+  board.nodes.forEach(({ path, x, y }) => {
+    board.setColor(path, "#ffffff");
+    const center = { x, y };
     const raw = sampleRawColorAt(center.x, center.y, canvas, ctx);
 
     if (raw) {
@@ -119,7 +113,7 @@ export function applyColors({
     b = clamp(b, 0, 255);
 
     const entry = nearestPaletteEntry(r, g, b, activePalette);
-    setFillValue(node.path, entry.hex);
+    board.setColor(node.path, entry.hex);
     updated++;
 
     if (ditherMode === "floyd-steinberg") {

@@ -1,10 +1,9 @@
 import { RANDOM_SYMMETRIES } from './constants.js';
-import { buildSymmetryOrbits } from './symmetry-engine.js';
+import { getSymmetryConfig } from './symmetry-engine.js';
 import { buildFixedPalette } from './color-engine.js';
-import { getColorableHexPaths, getFillValue, setFillValue } from './svg-engine.js';
 
 // One history entry per gesture, regardless of how many hexagons it crosses.
-export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, onSymmetryChange, downloadSvg, print }) {
+export function createDrawingControls({ svgLayer, getBoard, state, onChange, downloadSvg, print }) {
   const panel = document.createElement('div');
   panel.className = 'tab-panel';
   panel.id = 'drawTabPanel';
@@ -26,20 +25,18 @@ export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, on
   const symmetrySelect = panel.querySelector('#drawSymmetry');
   symmetrySelect.addEventListener('change', () => {
     finishStroke();
-    onSymmetryChange?.(symmetrySelect.value);
+    state.set({ symmetry: symmetrySelect.value });
   });
   let color = '#ffffff';
-  let stroke = null;
+  let strokeBoard = null;
   let pointerId = null;
   let lastPoint = null;
-  let paths = new Set();
-  let orbits = new Map();
-  const undo = [], redo = [];
+  let strokeSymmetry = null;
   const undoButton = panel.querySelector('#drawUndo');
   const redoButton = panel.querySelector('#drawRedo');
   function updateButtons() {
-    undoButton.disabled = !undo.length;
-    redoButton.disabled = !redo.length;
+    undoButton.disabled = !getBoard()?.canUndo;
+    redoButton.disabled = !getBoard()?.canRedo;
   }
   const palette = [...new Map(['purple', 'blue'].flatMap(buildFixedPalette).map(entry => [entry.hex, entry])).values()];
   for (const entry of palette) {
@@ -54,32 +51,21 @@ export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, on
     });
     panel.querySelector('#drawColors').appendChild(button);
   }
-  function paint(path) {
-    if (!paths.has(path) || getFillValue(path) === color) return;
-    if (!stroke.has(path)) stroke.set(path, { path, before: getFillValue(path), after: color });
-    setFillValue(path, color);
-  }
-  function paintSymmetric(path) {
-    for (const partner of orbits.get(path) || []) paint(partner);
-  }
   function paintTo(event) {
     const point = { x: event.clientX, y: event.clientY };
     const start = lastPoint || point;
     const steps = Math.max(1, Math.ceil(Math.hypot(point.x - start.x, point.y - start.y) / 2));
     for (let i = 1; i <= steps; i++) {
-      paintSymmetric(document.elementFromPoint(start.x + (point.x - start.x) * i / steps, start.y + (point.y - start.y) * i / steps));
+      const path = document.elementFromPoint(start.x + (point.x - start.x) * i / steps, start.y + (point.y - start.y) * i / steps);
+      strokeBoard.paint(path, color, strokeSymmetry);
     }
     lastPoint = point;
   }
   function finishStroke() {
-    if (!stroke) return;
-    if (stroke.size) {
-      undo.push([...stroke.values()]);
-      if (undo.length > 100) undo.shift();
-      redo.length = 0;
-      onChange();
-    }
-    stroke = null;
+    if (!strokeBoard) return;
+    strokeBoard.finishStroke();
+    strokeBoard = null;
+    onChange();
     lastPoint = null;
     const id = pointerId;
     pointerId = null;
@@ -87,18 +73,17 @@ export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, on
     updateButtons();
   }
   svgLayer.addEventListener('pointerdown', event => {
-    if (!isActive() || !getSvg() || event.button !== 0 || stroke) return;
+    if (state.value.activeTab !== 'draw' || !getBoard() || event.button !== 0 || strokeBoard) return;
     event.preventDefault();
-    paths = new Set(getColorableHexPaths(getSvg()));
-    const symmetry = RANDOM_SYMMETRIES.find(s => s.value === symmetrySelect.value);
-    orbits = buildSymmetryOrbits([...paths], symmetry);
-    stroke = new Map();
+    strokeBoard = getBoard();
+    strokeSymmetry = getSymmetryConfig(state.value.symmetry);
+    strokeBoard.beginStroke();
     pointerId = event.pointerId;
     svgLayer.setPointerCapture(pointerId);
     paintTo(event);
   });
   svgLayer.addEventListener('pointermove', event => {
-    if (!stroke || event.pointerId !== pointerId) return;
+    if (!strokeBoard || event.pointerId !== pointerId) return;
     for (const sample of event.getCoalescedEvents?.() || [event]) paintTo(sample);
     paintTo(event);
   });
@@ -107,36 +92,24 @@ export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, on
       if (event.pointerId === pointerId) finishStroke();
     });
   }
-  function restore(from, to, key) {
-    finishStroke();
-    const entry = from.pop();
-    if (!entry) return;
-    for (const change of entry) setFillValue(change.path, change[key]);
-    to.push(entry);
-    updateButtons();
-    onChange();
+  for (const [button, action] of [[undoButton, 'undo'], [redoButton, 'redo'], [panel.querySelector('#drawClear'), 'clear']]) {
+    button.addEventListener('click', () => {
+      finishStroke();
+      getBoard()?.[action]();
+      updateButtons();
+      onChange();
+    });
   }
-  undoButton.addEventListener('click', () => restore(undo, redo, 'before'));
-  redoButton.addEventListener('click', () => restore(redo, undo, 'after'));
-  panel.querySelector('#drawClear').addEventListener('click', () => {
-    finishStroke();
-    paths = new Set(getColorableHexPaths(getSvg()));
-    stroke = new Map();
-    const previousColor = color;
-    color = '#ffffff';
-    paths.forEach(paint);
-    color = previousColor;
-    finishStroke();
-  });
   panel.querySelector('#drawDownload').addEventListener('click', downloadSvg);
   panel.querySelector('#drawPrint').addEventListener('click', print);
+  state.subscribe((value, previous) => {
+    if (value.symmetry !== previous.symmetry || value.activeTab !== previous.activeTab) finishStroke();
+    symmetrySelect.value = value.symmetry;
+  });
   updateButtons();
-  return { panel, finishStroke, setSymmetry(value) {
+  return { panel, finishStroke, updateButtons, clearHistory() {
     finishStroke();
-    symmetrySelect.value = value;
-  }, clearHistory() {
-    finishStroke();
-    undo.length = redo.length = 0;
+    getBoard()?.clearHistory();
     updateButtons();
   } };
 }

@@ -1,6 +1,5 @@
 import { palettes } from './constants.js';
 import { normalizeHex } from './utils.js';
-import { getColorableHexPaths, getFillValue } from './svg-engine.js';
 import { buildFixedPalette } from './color-engine.js';
 
 export function setStatus(statusEl, message) {
@@ -16,18 +15,13 @@ export function getColorName(hex) {
   return normalized;
 }
 
-export function updateColorCounts(svgRoot, colorCountsEl, paletteSelectValue) {
-  if (!svgRoot) {
+export function updateColorCounts(board, colorCountsEl, paletteSelectValue) {
+  if (!board) {
     colorCountsEl.textContent = "";
     return;
   }
 
-  const counts = new Map();
-  for (const path of getColorableHexPaths(svgRoot)) {
-    const fill = normalizeHex(getFillValue(path));
-    if (!fill) continue;
-    counts.set(fill, (counts.get(fill) || 0) + 1);
-  }
+  const counts = board.colorCounts();
 
   if (!counts.size) {
     colorCountsEl.textContent = "";

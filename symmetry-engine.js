@@ -1,15 +1,34 @@
-// Work in rendered board coordinates so nested SVG transforms are respected.
-// Match only actual hex centers; do not snap to unrelated cells at the boundary.
-export function buildSymmetryOrbits(paths, symmetry) {
-  const nodes = paths.map(path => {
-    const rect = path.getBoundingClientRect();
-    return { path, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-  });
-  if (!nodes.length) return new Map();
+import { RANDOM_SYMMETRIES } from './constants.js';
+import { mod } from './utils.js';
+
+export function getSymmetryConfig(value) {
+  return RANDOM_SYMMETRIES.find((entry) => entry.value === value) || RANDOM_SYMMETRIES[0];
+}
+
+export function getSymmetryCoordinates(theta, symmetry) {
+  const period = (Math.PI * 2) / symmetry.order;
+  const local = mod(theta - symmetry.offset, period);
+  const canonical = symmetry.mirror ? Math.min(local, period - local) : local;
+  return {
+    angleNorm: period ? canonical / period : 0,
+    mirrorNorm: symmetry.mirror && period ? canonical / (period / 2) : canonical / period,
+  };
+}
+
+// Symmetry operates on measured nodes, independent of the DOM or viewport.
+export function getBoardGeometry(nodes) {
+  if (!nodes.length) return { center: { x: 0, y: 0 }, maxRadius: 1 };
   const center = {
     x: (Math.min(...nodes.map(n => n.x)) + Math.max(...nodes.map(n => n.x))) / 2,
     y: (Math.min(...nodes.map(n => n.y)) + Math.max(...nodes.map(n => n.y))) / 2,
   };
+  const maxRadius = Math.max(...nodes.map(n => Math.hypot(n.x - center.x, n.y - center.y))) || 1;
+  return { center, maxRadius };
+}
+
+export function buildSymmetryOrbits(nodes, symmetry) {
+  if (!nodes.length) return new Map();
+  const { center } = getBoardGeometry(nodes);
   let spacing = Infinity;
   for (const node of nodes.slice(1)) {
     const distance = Math.hypot(node.x - nodes[0].x, node.y - nodes[0].y);

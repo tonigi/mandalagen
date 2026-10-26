@@ -28,14 +28,30 @@ This software maps raster images to the hexagonal grid and supports procedural p
 - Switching tabs preserves your design, so generated and image-mapped designs can be touched up by hand.
 - Applying image colors, generating a pattern, or resetting replaces the design and clears drawing history.
 
-## Technical Details
+## Code structure
 
-AI-generated code. The application is built using a custom "engine" approach with ES6 modules for clean separation of concerns:
-  - `image-engine.js`: Canvas drawing and dithering.
-  - `pattern-engine.js`: Procedural generation and symmetry math.
-  - `svg-engine.js`: SVG parsing and hex-grid coordinate inference.
-  - `color-engine.js`: Palette management and quantization.
-  - `ui-engine.js`: Real-time status updates and color legends.
+The app uses browser ES modules without a build step or runtime framework.
+
+- `app.js`: application startup, image loading, and coordinating design replacement and export.
+- `app-state.js`: shared mode, symmetry, palette, and pattern settings. Controls subscribe to state rather than updating each other.
+- `board-model.js`: the editable cell list, measured geometry, cached symmetry groups, color counts, and stroke undo/redo. A new SVG gets a new model and history.
+- `svg-engine.js`: template parsing and hexagon identification; decorative artwork is excluded here.
+- `symmetry-engine.js`: pure symmetry calculations on measured cell centers.
+- `controls.js`, `drawing-engine.js`, `image-controls.js`: control rendering and DOM/pointer events.
+- `pattern-engine.js`: seeded pattern generation. `motifs.js` holds the independent geometric families and named variation parameters.
+- `image-engine.js`, `color-engine.js`: image sampling, dithering, and palette matching.
+- `ui-engine.js`: status and color-count presentation.
+
+Geometry is measured in SVG viewBox units when the board is created. Resizing or scrolling does not invalidate the cached groups. Drawing, generation, image mapping, and counts all use the same board model.
+
+## Automated checks
+
+```bash
+npm ci
+npm test
+```
+
+These Node checks cover all 1,045 cells in the actual template, all symmetry modes, symmetric painting and erasing, gesture undo/redo, clear and design replacement, shared controls, and application startup. jsdom is used only for DOM/event tests; no browser or Playwright is launched. Motif color fixtures preserve the pre-refactor output across 63 configurations.
 
 ## Running Locally
 
