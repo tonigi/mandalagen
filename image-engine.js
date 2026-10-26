@@ -1,6 +1,6 @@
 import { BAYER_4X4, DITHER_STRENGTH } from './constants.js';
 import { clamp, getPathCenterInViewBox } from './utils.js';
-import { getFillValue, setFillValue } from './svg-engine.js';
+import { getFillValue, setFillValue, getColorableHexPaths } from './svg-engine.js';
 import { nearestPaletteEntry } from './color-engine.js';
 
 export function orderedDitherOffset(x, y) {
@@ -59,7 +59,7 @@ export function applyColors({
 
   drawImageToCanvas(sourceImage, canvas, ctx, viewBox, imageTransform);
 
-  const paths = Array.from(svgRoot.querySelectorAll("path"));
+  const paths = getColorableHexPaths(svgRoot);
   const nodes = [];
 
   paths.forEach((path) => {
