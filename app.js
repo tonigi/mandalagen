@@ -1,3 +1,4 @@
+import { buildSymmetryOrbits } from './symmetry-engine.js';
 import { createDrawingControls } from './drawing-engine.js';
 import {
   RANDOM_MOTIFS,
@@ -36,7 +37,6 @@ import {
 
 import {
   getSymmetryConfig,
-  getSymmetryKey,
   getMetricsForNode,
   resolveRandomFill
 } from './pattern-engine.js';
@@ -265,19 +265,11 @@ function applyRandomPatternFromControls() {
   const rng = mulberry32(hashed);
   const motifKind = motif === "auto" ? RANDOM_MOTIFS[1 + Math.floor(rng() * (RANDOM_MOTIFS.length - 1))] : motif;
   const phases = [rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2];
-  const biases = {
-    ring: 0.85 + rng() * 0.45,
-    angle: 0.8 + rng() * 0.9,
-    accent: 0.55 + rng() * 0.6,
-  };
-  
   const paths = getColorableHexPaths(svgRoot);
   if (!paths.length) {
     setStatus(statusEl, "SVG loaded, but no colorable hexagons were found.");
     return;
   }
-  const center = { x: viewBox.width / 2, y: viewBox.height / 2 };
-  const maxRadius = Math.min(viewBox.width, viewBox.height) * 0.5 || 1;
   const nodes = paths.map((path) => {
     const point = getPathCenterInViewBox(path, svgRoot, viewBox);
     return { path, x: point.x, y: point.y, q: 0, r: 0 };
@@ -285,14 +277,21 @@ function applyRandomPatternFromControls() {
 
   inferHexGridCoordinates(nodes, viewBox);
 
-  const fillByKey = new Map();
+  const center = {
+    x: (Math.min(...nodes.map(n => n.x)) + Math.max(...nodes.map(n => n.x))) / 2,
+    y: (Math.min(...nodes.map(n => n.y)) + Math.max(...nodes.map(n => n.y))) / 2,
+  };
+  const maxRadius = Math.max(...nodes.map(n => Math.hypot(n.x - center.x, n.y - center.y))) || 1;
+  const orbits = buildSymmetryOrbits(paths, symmetry);
+  const painted = new Set();
   for (const node of nodes) {
-    const key = getSymmetryKey(node, center, maxRadius, symmetry);
-    if (!fillByKey.has(key)) {
-      const metrics = getMetricsForNode(node, center, maxRadius, symmetry);
-      fillByKey.set(key, resolveRandomFill(metrics, motifKind, phases, biases, colorPalette, contrast, whiteness));
+    if (painted.has(node.path)) continue;
+    const metrics = getMetricsForNode(node, center, maxRadius, symmetry);
+    const fill = resolveRandomFill(metrics, motifKind, phases, colorPalette, contrast, whiteness);
+    for (const partner of orbits.get(node.path)) {
+      setFillValue(partner, fill);
+      painted.add(partner);
     }
-    setFillValue(node.path, fillByKey.get(key));
   }
 
   setStatus(statusEl, `Randomized ${nodes.length} hexagons with ${motifKind} motif.`);
@@ -378,8 +377,12 @@ function createTabbedControls() {
   `;
   drawing = createDrawingControls({ svgLayer, getSvg: () => svgRoot,
     isActive: () => activeTab === "draw",
+    onSymmetryChange: (value) => { document.getElementById("randomSymmetrySelect").value = value; },
     onChange: () => updateColorCounts(svgRoot, colorCountsEl, paletteSelect.value),
     downloadSvg, print: () => window.print() });
+  const randomSymmetrySelect = randomPanel.querySelector("#randomSymmetrySelect");
+  drawing.setSymmetry(randomSymmetrySelect.value);
+  randomSymmetrySelect.addEventListener("change", () => drawing.setSymmetry(randomSymmetrySelect.value));
   const drawPanel = drawing.panel;
   const tabButtons = document.createElement("div");
   tabButtons.id = "controlTabs";

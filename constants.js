@@ -1,12 +1,13 @@
-export const RANDOM_MOTIFS = ["auto", "flower", "star", "ribbons", "diamonds", "petals", "mosaic"];
+export const RANDOM_MOTIFS = ["auto", "flower", "star", "ribbons", "diamonds", "petals", "mosaic", "rings"];
 export const RANDOM_MOTIF_DESCRIPTIONS = {
   auto: "Picks one motif family from the seed.",
-  flower: "Radial lobes with soft ring variation.",
-  star: "Spoke-like rays from the center.",
-  ribbons: "Diagonal bands crossing the grid.",
-  diamonds: "Lattice-like diamond structure.",
-  petals: "Tighter petal lobes with ring accents.",
-  mosaic: "Patchy, noisy cell clusters.",
+  flower: "Scalloped rosette: nested flower contours around a colored center.",
+  star: "Nested pointed stars with alternating tips and valleys.",
+  ribbons: "Crossing diagonal bands with alternating over-and-under intersections.",
+  diamonds: "Repeating rhombus tiles separated by fine white outlines.",
+  petals: "Staggered crowns of pointed petals with open space between them.",
+  mosaic: "Concentric courses of staggered colored tiles.",
+  rings: "Concentric color bands with optional white separators.",
 };
 // Planar group notation: D_n has n rotations and n reflections (2n operations).
 export const RANDOM_SYMMETRIES = [

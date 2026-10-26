@@ -4,7 +4,7 @@ import { buildFixedPalette } from './color-engine.js';
 import { getColorableHexPaths, getFillValue, setFillValue } from './svg-engine.js';
 
 // One history entry per gesture, regardless of how many hexagons it crosses.
-export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, downloadSvg, print }) {
+export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, onSymmetryChange, downloadSvg, print }) {
   const panel = document.createElement('div');
   panel.className = 'tab-panel';
   panel.id = 'drawTabPanel';
@@ -12,9 +12,9 @@ export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, do
   panel.innerHTML = `
     <p>Choose a color, then click or drag across hexagons. Works with a mouse, pen, or touch. Erase paints white.</p>
     <label class="control"><span>Symmetry</span>
-      <select id="drawSymmetry">${RANDOM_SYMMETRIES.map(s => `<option value="${s.value}" ${s.value === 'none' ? 'selected' : ''}>${s.label}</option>`).join('')}</select>
+      <select id="drawSymmetry">${RANDOM_SYMMETRIES.map(s => `<option value="${s.value}" ${s.value === RANDOM_SYMMETRIES[0].value ? 'selected' : ''}>${s.label}</option>`).join('')}</select>
     </label>
-    <p>Symmetry repeats each new stroke about the board center. Axes are measured clockwise from horizontal. Cₙ gives n rotations; Dₙ adds n reflections. Existing colors stay unchanged.</p>
+    <p>The symmetry setting is shared with Random. Symmetry repeats each new stroke about the board center. Axes are measured clockwise from horizontal. Cₙ gives n rotations; Dₙ adds n reflections. Existing colors stay unchanged.</p>
     <div class="buttons" id="drawColors" aria-label="Drawing colors"></div>
     <div class="buttons">
       <button type="button" id="drawUndo">Undo</button>
@@ -23,6 +23,11 @@ export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, do
       <button type="button" id="drawDownload">Download SVG</button>
       <button type="button" id="drawPrint">Print/Download</button>
     </div>`;
+  const symmetrySelect = panel.querySelector('#drawSymmetry');
+  symmetrySelect.addEventListener('change', () => {
+    finishStroke();
+    onSymmetryChange?.(symmetrySelect.value);
+  });
   let color = '#ffffff';
   let stroke = null;
   let pointerId = null;
@@ -85,7 +90,7 @@ export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, do
     if (!isActive() || !getSvg() || event.button !== 0 || stroke) return;
     event.preventDefault();
     paths = new Set(getColorableHexPaths(getSvg()));
-    const symmetry = RANDOM_SYMMETRIES.find(s => s.value === panel.querySelector('#drawSymmetry').value);
+    const symmetry = RANDOM_SYMMETRIES.find(s => s.value === symmetrySelect.value);
     orbits = buildSymmetryOrbits([...paths], symmetry);
     stroke = new Map();
     pointerId = event.pointerId;
@@ -126,7 +131,10 @@ export function createDrawingControls({ svgLayer, getSvg, isActive, onChange, do
   panel.querySelector('#drawDownload').addEventListener('click', downloadSvg);
   panel.querySelector('#drawPrint').addEventListener('click', print);
   updateButtons();
-  return { panel, finishStroke, clearHistory() {
+  return { panel, finishStroke, setSymmetry(value) {
+    finishStroke();
+    symmetrySelect.value = value;
+  }, clearHistory() {
     finishStroke();
     undo.length = redo.length = 0;
     updateButtons();

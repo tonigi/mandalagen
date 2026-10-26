@@ -14,14 +14,15 @@ This software maps raster images to the hexagonal grid and supports procedural p
 - **Live Preview**: Adjust overlay opacity to see how the image aligns with the hex grid before applying colors.
 
 ### 2. Random Pattern Generator
-- **Procedural Motifs**: Generate complex designs using motifs like "Flower", "Star", "Ribbons", "Diamonds", "Petals", and "Mosaic".
+- **Geometric Motifs**: Choose scalloped flower rosettes, nested pointed stars, woven ribbons, diamond tiles, petal crowns, annular mosaics, or concentric rings. Seed variations change proportions and a coordinated subset of palette colors. Contrast controls detail density; white accents add outlines along motif boundaries.
 - **Symmetry Modes**: Support for various rotational and mirror symmetries (C6, C3, C2).
 - **Seedable Generation**: Use unique seeds to recreate or share specific patterns.
 - **Customizable Aesthetics**: Fine-tune contrast and "white accents" for varied visual styles.
 
 ### 3. Hand-Drawing
 - Open **Draw** to paint individual hexagons or drag a stroke using a mouse, pen, or touch.
-- Symmetry modes: C₁ (identity), C₂/C₃/C₆ (cyclic rotations), Cₛ (one reflection), and D₂/D₃/D₆ (planar dihedral groups with n rotations and n reflections). Axis orientations are measured clockwise from horizontal; options preserve the hexagonal lattice. Each new stroke and erase is repeated about the board center.
+- Drawing and Random share the selected symmetry (D₆ by default). Select C₁ explicitly for free drawing. Painting and erasing use the same symmetry, and undo/redo covers all repeated cells in a stroke.
+- Symmetry modes: C₁ (identity), C₂/C₃/C₆ (cyclic rotations), Cₛ (one reflection), and D₂/D₃/D₆ (planar dihedral groups with n rotations and n reflections). Axis orientations are measured clockwise from horizontal; options preserve the hexagonal lattice. Each new stroke and erase is repeated about the board center. Random generation uses the same cell symmetry groups as drawing.
 - Choose from both peg palettes; **Erase (white)** restores white hexagons.
 - **Undo/Redo** works per stroke. **Clear board** is also undoable.
 - Switching tabs preserves your design, so generated and image-mapped designs can be touched up by hand.

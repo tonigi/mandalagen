@@ -1,49 +1,58 @@
 import { RANDOM_SYMMETRIES } from './constants.js';
 import { mod, clamp01 } from './utils.js';
 
-export function randomMotifValue(kind, metrics, phases) {
-  const { radial, angleNorm, mirrorNorm, ring, q, r } = metrics;
-  const [p1, p2, p3, p4] = phases;
-
-  const flower =
-    0.62 * Math.cos(mirrorNorm * Math.PI * 3 + p1) +
-    0.45 * Math.sin(radial * 11 + p2) +
-    0.25 * Math.cos(ring * 0.82 + p3);
-
-  const star =
-    0.72 * Math.cos(angleNorm * Math.PI * 2 + p1) * (1 - radial * 0.6) +
-    0.35 * Math.sin(radial * 14 + p2) +
-    0.2 * Math.cos(ring * 0.75 + p3);
-
-  const ribbons =
-    0.45 * Math.sin((q - r) * 0.82 + p1) +
-    0.4 * Math.cos((q + 2 * r) * 0.55 + p2) +
-    0.3 * Math.sin(angleNorm * Math.PI * 5 + radial * 8 + p3);
-
-  const diamonds =
-    0.45 * Math.cos((q + r) * 0.82 + p1) +
-    0.45 * Math.cos((q - r) * 0.82 + p2) +
-    0.32 * Math.cos(mirrorNorm * Math.PI * 6 + radial * 7 + p3);
-
-  const petals =
-    0.62 * Math.cos(mirrorNorm * Math.PI * 5 + p1) * (1 - radial * 0.35) +
-    0.4 * Math.cos(radial * 9 + p2) +
-    0.25 * Math.cos(angleNorm * Math.PI * 4 + p3);
-
-  const mosaic =
-    0.35 * Math.sin(q * 0.92 + p1) +
-    0.35 * Math.cos(r * 0.9 + p2) +
-    0.2 * Math.sin((q + r) * 0.63 + p3) +
-    0.18 * Math.cos(radial * 15 + p4);
-
-  if (kind === "flower") return flower;
-  if (kind === "star") return star;
-  if (kind === "ribbons") return ribbons;
-  if (kind === "diamonds") return diamonds;
-  if (kind === "petals") return petals;
-  if (kind === "mosaic") return mosaic;
-
-  return 0.32 * flower + 0.28 * star + 0.2 * ribbons + 0.2 * diamonds;
+// Geometric regions, rather than mixtures of unrelated waves, define each family.
+// Each result carries a color band and distance to its own decorative boundary.
+export function motifRegion(kind, metrics, phases, contrast) {
+  const { radial: radius, theta } = metrics;
+  const variation = phases.map(p => mod(p / (2 * Math.PI), 1));
+  const repeats = 6 * (1 + Math.floor(variation[0] * 2));
+  const angle = mod(theta * repeats / (2 * Math.PI), 1);
+  const folded = Math.min(angle, 1 - angle) * 2;
+  const density = 3 + Math.floor(contrast / 3);
+  const ring = radius * density;
+  let coordinate, band;
+  if (kind === 'rings') {
+    coordinate = ring;
+  } else if (kind === 'flower') {
+    // Nested scalloped contours form a single rosette around a colored heart.
+    const contour = 0.72 + (0.12 + variation[1] * 0.12) * Math.cos(theta * repeats);
+    coordinate = radius / contour * (density - 1);
+  } else if (kind === 'star') {
+    // Piecewise-linear radial profile gives crisp alternating tips and valleys.
+    const contour = 1 - (0.3 + variation[1] * 0.2) * folded;
+    coordinate = radius / contour * (density - 1);
+  } else if (kind === 'petals') {
+    // Separate pointed lenses in successive radial crowns, with white between.
+    const crown = Math.floor(radius * 3);
+    const stagger = mod(angle + (crown % 2) * 0.5, 1);
+    const across = Math.abs(stagger - 0.5) * 2;
+    const along = Math.abs(mod(radius * 3, 1) - 0.5) * 2;
+    const lens = across * across + along;
+    return { band: crown + (lens < 0.45 ? 1 : 0), edge: Math.abs(lens - 0.88), blank: lens > 0.88 && radius > 0.12 };
+  } else if (kind === 'ribbons') {
+    // Two crossing diagonal strip systems; alternating crossings suggest a weave.
+    const x = radius * Math.cos(theta) * density * 1.6;
+    const y = radius * Math.sin(theta) * density * 1.6;
+    const u = x + y, v = x - y;
+    const du = Math.abs(mod(u, 1) - 0.5), dv = Math.abs(mod(v, 1) - 0.5);
+    const over = mod(Math.floor(u) + Math.floor(v), 2) === 0;
+    band = (du < 0.22 && (dv >= 0.22 || over)) ? 0 : 2;
+    return { band, edge: Math.min(Math.abs(du - 0.22), Math.abs(dv - 0.22)), blank: du > 0.22 && dv > 0.22 };
+  } else if (kind === 'diamonds') {
+    const x = radius * Math.cos(theta) * density * 1.5;
+    const y = radius * Math.sin(theta) * density * 1.5;
+    const u = x + y, v = x - y;
+    const edge = Math.min(mod(u, 1), 1 - mod(u, 1), mod(v, 1), 1 - mod(v, 1));
+    return { band: mod(Math.floor(u) + 2 * Math.floor(v), 3), edge, blank: false };
+  } else {
+    // Annular tiles with alternate rows staggered by half a tile.
+    const row = Math.floor(ring);
+    const tile = mod(theta * repeats / (2 * Math.PI) + (row % 2) * 0.5, repeats);
+    return { band: row + Math.floor(tile), edge: Math.min(mod(ring, 1), 1 - mod(ring, 1), mod(tile, 1), 1 - mod(tile, 1)), blank: false };
+  }
+  const fraction = mod(coordinate, 1);
+  return { band: Math.floor(coordinate), edge: Math.min(fraction, 1 - fraction), blank: false };
 }
 
 export function getSymmetryConfig(value) {
@@ -60,67 +69,21 @@ export function getSymmetryCoordinates(theta, symmetry) {
   };
 }
 
-export function getSymmetryKey(node, center, maxRadius, symmetry) {
-  if (symmetry.value === "none") {
-    return `${node.q}:${node.r}`;
-  }
-  const dx = node.x - center.x;
-  const dy = node.y - center.y;
-  const theta = Math.atan2(dy, dx);
-  const radialBucket = Math.round((Math.hypot(dx, dy) / maxRadius) * 120);
-  const coords = getSymmetryCoordinates(theta, symmetry);
-  const angleBucket = Math.round(coords.angleNorm * 120);
-  return `${radialBucket}:${angleBucket}`;
-}
-
 export function getMetricsForNode(node, center, maxRadius, symmetry) {
-  const dx = node.x - center.x;
-  const dy = node.y - center.y;
-  const theta = Math.atan2(dy, dx);
+  const dx = node.x - center.x, dy = node.y - center.y;
   const radial = clamp01(Math.hypot(dx, dy) / maxRadius);
-  if (symmetry.value === "none") {
-    return {
-      radial,
-      angleNorm: mod(theta, Math.PI * 2) / (Math.PI * 2),
-      mirrorNorm: mod(theta, Math.PI * 2) / (Math.PI * 2),
-      ring: Math.hypot(node.q, node.r),
-      q: node.q,
-      r: node.r,
-      theta,
-    };
-  }
-  const coords = getSymmetryCoordinates(theta, symmetry);
-  const radialBucket = Math.round(radial * 120);
-  const angleBucket = Math.round(coords.angleNorm * 120);
-  const angleNorm = clamp01(angleBucket / 120);
-  const mirrorNorm = symmetry.mirror ? clamp01(angleNorm * 2) : angleNorm;
-  const ring = radialBucket;
-  const q = Math.round(angleNorm * 30);
-  const r = radialBucket - q;
-  return {
-    radial: clamp01(radialBucket / 120),
-    angleNorm,
-    mirrorNorm,
-    ring,
-    q,
-    r,
-    theta: angleNorm * ((Math.PI * 2) / symmetry.order),
-  };
+  const coords = getSymmetryCoordinates(Math.atan2(dy, dx), symmetry);
+  return { radial, theta: coords.angleNorm * 2 * Math.PI / symmetry.order };
 }
 
-export function resolveRandomFill(metrics, motifKind, phases, biases, colorPalette, contrast, whiteness) {
-  const { radial, angleNorm, mirrorNorm, ring } = metrics;
-  const value = randomMotifValue(motifKind, metrics, phases);
-  const bias =
-    0.15 * Math.cos(radial * 10 * biases.ring + phases[0]) +
-    0.15 * Math.sin(angleNorm * Math.PI * 4 * biases.angle + phases[1]);
-  const normalized = clamp01(0.5 + 0.5 * Math.tanh((value + bias) * (1.15 + contrast * 0.18)));
-  const colorIndex = Math.min(colorPalette.length - 1, Math.floor(normalized * colorPalette.length));
-  const accentField =
-    Math.abs(
-      Math.sin(ring * 0.95 * biases.accent + mirrorNorm * Math.PI * 5 + phases[2]) +
-        0.35 * Math.cos(radial * 18 + phases[3])
-    ) / 1.35;
-  const makeWhite = radial < 0.08 || (radial < 0.93 && accentField > 0.84 - whiteness * 0.035);
-  return makeWhite ? "#ffffff" : colorPalette[colorIndex].hex;
+export function resolveRandomFill(metrics, motifKind, phases, colorPalette, contrast, whiteness) {
+  if (!colorPalette.length) return '#ffffff';
+  const region = motifRegion(motifKind, metrics, phases, contrast);
+  const outlineWidth = whiteness * 0.014;
+  if (region.blank || (whiteness > 0 && region.edge < outlineWidth && metrics.radial > 0.1)) return '#ffffff';
+  // Limit each design to a deliberate subset, rather than using every peg color.
+  const count = Math.min(colorPalette.length, 3 + Number(contrast >= 8));
+  const offset = Math.floor(mod(phases[3] / (2 * Math.PI), 1) * colorPalette.length);
+  const index = mod(region.band, count);
+  return colorPalette[(offset + index) % colorPalette.length].hex;
 }
