@@ -239,3 +239,11 @@ button:hover {
     width: 100%;
   }
 }
+
+.tab-panel:not([hidden]) { display: grid; gap: 16px; }
+[hidden] { display: none !important; }
+#overlayCanvas, #svgLayer.drawing { touch-action: none; }
+#svgLayer.drawing { cursor: crosshair; user-select: none; }
+#drawColors button[aria-pressed="true"] { outline: 3px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: 0.4; cursor: default; transform: none; box-shadow: none; }
+button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }

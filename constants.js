@@ -8,17 +8,17 @@ export const RANDOM_MOTIF_DESCRIPTIONS = {
   petals: "Tighter petal lobes with ring accents.",
   mosaic: "Patchy, noisy cell clusters.",
 };
+// Planar group notation: D_n has n rotations and n reflections (2n operations).
 export const RANDOM_SYMMETRIES = [
-  { value: "c6-mirror-vertex", label: "C6 mirrored through vertices", order: 6, offset: 0, mirror: true },
-  { value: "c6-mirror-side", label: "C6 mirrored through sides", order: 6, offset: Math.PI / 6, mirror: true },
-  { value: "c6", label: "C6 rotational", order: 6, offset: 0, mirror: false },
-  { value: "c3-vertex", label: "C3 through vertices", order: 3, offset: 0, mirror: true },
-  { value: "c3-side", label: "C3 through sides", order: 3, offset: Math.PI / 3, mirror: true },
-  { value: "c3", label: "C3 rotational", order: 3, offset: 0, mirror: false },
-  { value: "c2-vertex", label: "C2 through vertices", order: 2, offset: 0, mirror: true },
-  { value: "c2-side", label: "C2 through sides", order: 2, offset: Math.PI / 6, mirror: true },
-  { value: "c2", label: "C2 rotational", order: 2, offset: 0, mirror: false },
-  { value: "none", label: "No enforced symmetry", order: 1, offset: 0, mirror: false },
+  { value: "c6-mirror-vertex", label: "D₆ — hexagonal dihedral (6 mirrors)", order: 6, offset: 0, mirror: true },
+  { value: "c6", label: "C₆ — sixfold rotational (60°)", order: 6, offset: 0, mirror: false },
+  { value: "c3-vertex", label: "D₃ — triangular dihedral (axes 0°, 60°, 120°)", order: 3, offset: 0, mirror: true },
+  { value: "c3-side", label: "D₃ — triangular dihedral (axes 30°, 90°, 150°)", order: 3, offset: Math.PI / 6, mirror: true },
+  { value: "c3", label: "C₃ — threefold rotational (120°)", order: 3, offset: 0, mirror: false },
+  ...[0, 30, 60].map(degrees => ({ value: `d2-${degrees}`, label: `D₂ — dihedral (axes ${degrees}° and ${degrees + 90}°)`, order: 2, offset: degrees * Math.PI / 180, mirror: true })),
+  { value: "c2", label: "C₂ — twofold rotational (180°)", order: 2, offset: 0, mirror: false },
+  ...[0, 30, 60, 90, 120, 150].map(degrees => ({ value: `mirror-${degrees}`, label: `Cₛ — bilateral reflection (axis ${degrees}°)`, order: 1, offset: degrees * Math.PI / 180, mirror: true })),
+  { value: "none", label: "C₁ — identity (free drawing)", order: 1, offset: 0, mirror: false },
 ];
 export const BAYER_4X4 = [
   [0, 8, 2, 10],

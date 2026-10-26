@@ -1,3 +1,4 @@
+import { createDrawingControls } from './drawing-engine.js';
 import {
   RANDOM_MOTIFS,
   RANDOM_MOTIF_DESCRIPTIONS,
@@ -85,6 +86,14 @@ let isDragging = false;
 let lastPointer = { x: 0, y: 0 };
 let applyTimeout = null;
 let ditherMode = "none";
+let activeTab = "image";
+let drawing;
+let imageLoadVersion = 0;
+
+function cancelPendingApply() {
+  window.clearTimeout(applyTimeout);
+  applyTimeout = null;
+}
 
 const imageTransform = {
   scale: 1,
@@ -114,6 +123,8 @@ function insertSvg(svgText) {
 }
 
 function handleApplyColors() {
+  if (activeTab !== "image") return;
+  drawing?.clearHistory();
   applyColors({
     svgRoot,
     imageReady,
@@ -135,6 +146,7 @@ function scheduleApplyColors(delayMs = 150) {
   }
   applyTimeout = window.setTimeout(() => {
     applyTimeout = null;
+    if (activeTab !== "image") return;
     if (layoutReady) {
       handleApplyColors();
     } else {
@@ -148,12 +160,15 @@ function scheduleApplyColors(delayMs = 150) {
 }
 
 function loadImage(file) {
+  const version = ++imageLoadVersion;
+  cancelPendingApply();
   if (currentImageUrl) {
     URL.revokeObjectURL(currentImageUrl);
   }
   const img = new Image();
   currentImageUrl = URL.createObjectURL(file);
   img.onload = () => {
+    if (version !== imageLoadVersion) return;
     sourceImage = img;
     canvas.width = viewBox.width;
     canvas.height = viewBox.height;
@@ -166,7 +181,7 @@ function loadImage(file) {
     scheduleApplyColors(0);
   };
   img.onerror = () => {
-    imageReady = false;
+    if (version !== imageLoadVersion) return;
     setStatus(statusEl, "Could not load that image.");
   };
   img.src = currentImageUrl;
@@ -205,6 +220,8 @@ function downloadSvg() {
 }
 
 function resetSvg() {
+  cancelPendingApply();
+  drawing?.clearHistory();
   if (!originalSvgText) {
     setStatus(statusEl, "SVG not loaded yet.");
     return;
@@ -220,6 +237,8 @@ function resetSvg() {
 }
 
 function applyRandomPatternFromControls() {
+  cancelPendingApply();
+  drawing?.clearHistory();
   if (!originalSvgText) {
     setStatus(statusEl, "SVG not loaded yet.");
     return;
@@ -357,17 +376,24 @@ function createTabbedControls() {
     </div>
     </fieldset>
   `;
+  drawing = createDrawingControls({ svgLayer, getSvg: () => svgRoot,
+    isActive: () => activeTab === "draw",
+    onChange: () => updateColorCounts(svgRoot, colorCountsEl, paletteSelect.value),
+    downloadSvg, print: () => window.print() });
+  const drawPanel = drawing.panel;
   const tabButtons = document.createElement("div");
   tabButtons.id = "controlTabs";
   tabButtons.className = "buttons";
   tabButtons.innerHTML = `
     <button id="imageTabBtn" type="button" aria-pressed="true">Image</button>
     <button id="randomTabBtn" type="button" aria-pressed="false">Random</button>
+    <button id="drawTabBtn" type="button" aria-pressed="false">Draw</button>
   `;
 
   controls.appendChild(tabButtons);
   controls.appendChild(imagePanel);
   controls.appendChild(randomPanel);
+  controls.appendChild(drawPanel);
 
   const randomFieldset = document.getElementById("randomPatternControls");
   randomFieldset.style.border = "1px solid var(--panel-edge)";
@@ -391,30 +417,20 @@ function createTabbedControls() {
   document.getElementById("imageTabBtn").style.color = "#fff";
 
   const setActiveTab = (tab) => {
-    const imageActive = tab === "image";
-    imagePanel.hidden = !imageActive;
-    randomPanel.hidden = imageActive;
-    document.getElementById("imageTabBtn").setAttribute("aria-pressed", `${imageActive}`);
-    document.getElementById("randomTabBtn").setAttribute("aria-pressed", `${!imageActive}`);
-    document.getElementById("imageTabBtn").style.background = imageActive ? "var(--accent)" : "var(--panel-edge)";
-    document.getElementById("imageTabBtn").style.color = imageActive ? "#fff" : "var(--ink)";
-    document.getElementById("randomTabBtn").style.background = imageActive ? "var(--panel-edge)" : "var(--accent)";
-    document.getElementById("randomTabBtn").style.color = imageActive ? "var(--ink)" : "#fff";
-    overlayCanvas.style.display = imageActive ? "" : "none";
-    if (!imageActive) {
-      if (originalSvgText) {
-        insertSvg(originalSvgText);
-        layoutReady = false;
-        requestAnimationFrame(() => {
-          layoutReady = true;
-        });
-        if (imageReady) {
-          canvas.width = viewBox.width;
-          canvas.height = viewBox.height;
-          drawImageToCanvas(sourceImage, canvas, ctx, viewBox, imageTransform);
-        }
-      }
+    drawing.finishStroke();
+    cancelPendingApply();
+    endDrag();
+    activeTab = tab;
+    for (const [name, panel] of [["image", imagePanel], ["random", randomPanel], ["draw", drawPanel]]) {
+      const selected = name === tab;
+      panel.hidden = !selected;
+      const button = document.getElementById(`${name}TabBtn`);
+      button.setAttribute("aria-pressed", `${selected}`);
+      button.style.background = selected ? "var(--accent)" : "var(--panel-edge)";
+      button.style.color = selected ? "#fff" : "var(--ink)";
     }
+    overlayCanvas.style.display = tab === "image" ? "" : "none";
+    svgLayer.classList.toggle("drawing", tab === "draw");
   };
 
   const bindValue = (inputId, valueId, format = (value) => value) => {
@@ -442,6 +458,7 @@ function createTabbedControls() {
       activePalette = buildFixedPalette(event.target.value);
     });
   }
+  document.getElementById("drawTabBtn").addEventListener("click", () => setActiveTab("draw"));
   document.getElementById("imageTabBtn")?.addEventListener("click", () => setActiveTab("image"));
   document.getElementById("randomTabBtn")?.addEventListener("click", () => setActiveTab("random"));
   document.getElementById("generatePatternBtn")?.addEventListener("click", applyRandomPatternFromControls);
@@ -486,7 +503,7 @@ translateXInput.addEventListener("input", updateTransformValues);
 translateYInput.addEventListener("input", updateTransformValues);
 
 overlayCanvas.addEventListener("pointerdown", (event) => {
-  if (!imageReady) {
+  if (!imageReady || event.button !== 0) {
     return;
   }
   isDragging = true;
@@ -536,7 +553,7 @@ function endDrag(event) {
 
 overlayCanvas.addEventListener("pointerup", endDrag);
 overlayCanvas.addEventListener("pointercancel", endDrag);
-overlayCanvas.addEventListener("pointerleave", endDrag);
+overlayCanvas.addEventListener("lostpointercapture", endDrag);
 overlayCanvas.addEventListener(
   "wheel",
   (event) => {
